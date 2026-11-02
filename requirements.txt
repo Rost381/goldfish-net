@@ -1,0 +1,3 @@
+# Python >=3.12.3. Проверено на ccxt 4.5.91
+ccxt
+python-dotenv
