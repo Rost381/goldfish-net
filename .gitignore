@@ -156,11 +156,15 @@ arb/
 # Exec files
 #*.sh
 
+# Temp 
 .tmp/
 tmp*
 .notes/
 *.session*
 tz.txt
+
+# Windows scripts
+*.ps1
 
 static/*
 staticfiles/*
@@ -178,3 +182,5 @@ data/*
 /logs/*
 *.log*
 db.sqlite3
+
+
