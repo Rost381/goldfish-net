@@ -1,0 +1,33 @@
+Проба ESPORTSUSDT | режим=demo | hedge=да | цена=0.01415 | qty=706 (~9.9899 USDT)
+ccxt 4.5.91 | 2026-11-03 11:27:35
+
+A. ВХОДЫ (условные ордера на открытие), позиции нет
+  BUY  STOP_MARKET        LONG  (выше цены)                      trigger    0.01472  -> ПРИНЯТ
+  BUY  TAKE_PROFIT_MARKET LONG  (ниже цены)                      trigger    0.01358  -> ПРИНЯТ
+  SELL STOP_MARKET        SHORT (ниже цены)                      trigger    0.01358  -> ПРИНЯТ
+  SELL TAKE_PROFIT_MARKET SHORT (выше цены)                      trigger    0.01472  -> ПРИНЯТ
+  BUY  STOP_MARKET        LONG  (НЕ с той стороны, ждем -2021)   trigger    0.01358  -> ОТКЛОНЕН code=-2021 Order would immediately trigger.
+  SELL STOP_MARKET        SHORT (НЕ с той стороны, ждем -2021)   trigger    0.01472  -> ОТКЛОНЕН code=-2021 Order would immediately trigger.
+
+B. ЗАКРЫВАЮЩИЕ (TP/SL) БЕЗ позиции, с quantity
+  LONG  TP: SELL TAKE_PROFIT_MARKET qty                          trigger    0.01472  -> ПРИНЯТ
+  LONG  SL: SELL STOP_MARKET        qty                          trigger    0.01358  -> ПРИНЯТ
+  SHORT TP: BUY  TAKE_PROFIT_MARKET qty                          trigger    0.01358  -> ПРИНЯТ
+  SHORT SL: BUY  STOP_MARKET        qty                          trigger    0.01472  -> ПРИНЯТ
+  LONG  SL: SELL STOP_MARKET closePosition=true                  trigger    0.01358  -> ОТКЛОНЕН code=-4509 Time in Force (TIF) GTE can only be used with open positions. Please ensure that positions are available.
+  LONG  SL выше цены (НЕ с той стороны, ждем -2021)              trigger    0.01472  -> ОТКЛОНЕН code=-2021 Order would immediately trigger.
+
+C. С ОТКРЫТОЙ позицией (LONG, минимальный объем), TP/SL БОЛЬШЕ позиции
+  открыт LONG 706 по рынку
+  LONG TP qty=3x позиции                                         trigger    0.01472  -> ПРИНЯТ
+  LONG TP qty=3x еще один (сумма 6x позиции)                     trigger      0.015  -> ПРИНЯТ
+  LONG SL qty=3x позиции                                         trigger    0.01358  -> ПРИНЯТ
+  позиция закрыта
+
+ИТОГ
+  Входы STOP_MARKET/TAKE_PROFIT_MARKET с нужной стороны цены: ПРИНИМАЮТСЯ
+  Вход с неправильной стороны цены:                           ОТКЛОНЯЮТСЯ (ожидаем ОТКЛОНЯЮТСЯ, -2021)
+  TP/SL с quantity без позиции (hedge):                       ПРИНИМАЮТСЯ
+  SL closePosition=true без позиции:                          ОТКЛОНЯЮТСЯ
+  SL с неправильной стороны цены:                             ОТКЛОНЯЮТСЯ (ожидаем ОТКЛОНЯЮТСЯ, -2021)
+  TP/SL больше позиции (с позицией):                          ПРИНИМАЮТСЯ
