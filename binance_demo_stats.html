@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8">
+<title>Binance Demo Futures Stats</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+ table.sortable th{cursor:pointer;user-select:none}
+ table.sortable th:hover{background:#f9fafb}
+ table.sortable th::after{content:' ↕';opacity:.3}
+</style></head>
+<body class="bg-gray-100 p-6 font-sans"><div class="max-w-7xl mx-auto">
+
+
+<h1 class="text-3xl font-bold text-gray-800 mb-2">📊 Binance Futures — Demo Trading</h1>
+<p class="text-sm text-gray-500 mb-6">Символов: 5 · Ордеров: 90 (филлов: 97)
+ · Период: 2026-10-30 … 2026-11-04 · Время — UTC · Сформировано: 2026-11-04 11:09</p>
+
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Net PnL (realized − комиссии)</p>
+ <p class="text-xl font-bold text-green-600">$198.45</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Unrealized PnL</p>
+ <p class="text-xl font-bold text-red-600">$-9.75</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Realized PnL</p>
+ <p class="text-xl font-bold text-green-600">$199.29</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Комиссии</p>
+ <p class="text-xl font-bold text-gray-700">$0.84</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Win Rate net (после комиссии)</p>
+ <p class="text-xl font-bold text-gray-800">95.8% (23/24)</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Win Rate gross (realizedPnl)</p>
+ <p class="text-xl font-bold text-gray-800">95.8% (23/24)</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Profit Factor</p>
+ <p class="text-xl font-bold text-gray-800">16497.05</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Ср. win / loss</p>
+ <p class="text-xl font-bold text-gray-800">8.64 / -0.01</p></div>
+ 
+ <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">Макс. просадка</p>
+ <p class="text-xl font-bold text-red-600">$-0.12</p></div>
+ 
+</div>
+<div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-4">Открытые позиции
+ <span class="text-sm font-normal text-gray-500">(нереализованный PnL по mark price на момент запуска)</span></h2>
+<div class="overflow-x-auto"><table class="min-w-full sortable text-sm">
+<thead><tr class="bg-gray-50">
+ <th class="px-4 py-2 text-left">Символ</th><th class="px-4 py-2 text-left">Сторона</th>
+ <th class="px-4 py-2 text-right">Объём</th><th class="px-4 py-2 text-right">Вход</th>
+ <th class="px-4 py-2 text-right">Mark</th><th class="px-4 py-2 text-right">Notional</th>
+ <th class="px-4 py-2 text-right">Ликвидация</th><th class="px-4 py-2 text-right">Unrealized PnL</th>
+ <th class="px-4 py-2 text-right">% от входа</th></tr></thead><tbody>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-4 py-2 text-red-600" data-v="-439744">SHORT (SHORT)</td>
+ <td class="px-4 py-2 text-right" data-v="439744">439744</td>
+ <td class="px-4 py-2 text-right" data-v="0.0004866206302">0.0004866206302</td>
+ <td class="px-4 py-2 text-right" data-v="0.0005088">0.0005088</td>
+ <td class="px-4 py-2 text-right" data-v="223.7417472">223.74</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.02481668">0.02481668</td>
+ <td class="px-4 py-2 text-right text-red-600" data-v="-9.75352192">-9.75</td>
+ <td class="px-4 py-2 text-right text-red-600" data-v="-4.55796540949858">-4.56%</td></tr>
+</tbody></table></div>
+</div>
+
+<div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-4">Кумулятивный Net PnL (по дням)</h2>
+ <canvas id="chart" height="100"></canvas></div>
+
+<div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-4">По символам</h2>
+<div class="overflow-x-auto"><table class="min-w-full sortable text-sm">
+<thead><tr class="bg-gray-50">
+ <th class="px-4 py-2 text-left">Символ</th><th class="px-4 py-2 text-right">Net PnL</th>
+ <th class="px-4 py-2 text-right">Realized</th><th class="px-4 py-2 text-right">Комиссии</th>
+ <th class="px-4 py-2 text-right">Ордеров</th><th class="px-4 py-2 text-right">Закрытий</th>
+ <th class="px-4 py-2 text-right">Win Rate</th></tr></thead><tbody>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-4 py-2 text-right text-green-600" data-v="161.09849184">161.10</td>
+ <td class="px-4 py-2 text-right" data-v="161.52534998">161.53</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.42685814">0.43</td>
+ <td class="px-4 py-2 text-right" data-v="14">14</td>
+ <td class="px-4 py-2 text-right" data-v="5">5</td>
+ <td class="px-4 py-2 text-right" data-v="100.0">100.0%</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-4 py-2 text-right text-green-600" data-v="27.80987786">27.81</td>
+ <td class="px-4 py-2 text-right" data-v="27.905799990000002">27.91</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.09592213000000001">0.10</td>
+ <td class="px-4 py-2 text-right" data-v="13">13</td>
+ <td class="px-4 py-2 text-right" data-v="4">4</td>
+ <td class="px-4 py-2 text-right" data-v="75.0">75.0%</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-4 py-2 text-right text-green-600" data-v="6.9994419400000005">7.00</td>
+ <td class="px-4 py-2 text-right" data-v="7.24719994">7.25</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.247758">0.25</td>
+ <td class="px-4 py-2 text-right" data-v="32">32</td>
+ <td class="px-4 py-2 text-right" data-v="14">14</td>
+ <td class="px-4 py-2 text-right" data-v="100.0">100.0%</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="FIGHTUSDT">FIGHTUSDT</td>
+ <td class="px-4 py-2 text-right text-green-600" data-v="2.58807136">2.59</td>
+ <td class="px-4 py-2 text-right" data-v="2.611815">2.61</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.02374364">0.02</td>
+ <td class="px-4 py-2 text-right" data-v="4">4</td>
+ <td class="px-4 py-2 text-right" data-v="1">1</td>
+ <td class="px-4 py-2 text-right" data-v="100.0">100.0%</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-4 py-2" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-4 py-2 text-right text-red-600" data-v="-0.04559635">-0.05</td>
+ <td class="px-4 py-2 text-right" data-v="0.0">0.00</td>
+ <td class="px-4 py-2 text-right text-gray-500" data-v="0.04559635">0.05</td>
+ <td class="px-4 py-2 text-right" data-v="27">27</td>
+ <td class="px-4 py-2 text-right" data-v="0">0</td>
+ <td class="px-4 py-2 text-right" data-v="0.0">0.0%</td></tr>
+</tbody></table></div></div>
+
+<div class="bg-white p-6 rounded-lg shadow"><h2 class="text-xl font-semibold mb-4">История ордеров
+ <span class="text-sm font-normal text-gray-500">(последние 90 из 90; полная история — в CSV)</span></h2>
+<div class="overflow-x-auto max-h-96 overflow-y-auto"><table class="min-w-full sortable text-sm">
+<thead class="sticky top-0 bg-gray-50"><tr>
+ <th class="px-3 py-2 text-left">Время</th><th class="px-3 py-2 text-left">Символ</th>
+ <th class="px-3 py-2 text-left">Сторона</th><th class="px-3 py-2 text-right">Кол-во</th>
+ <th class="px-3 py-2 text-right">Филлов</th><th class="px-3 py-2 text-right">Realized</th>
+ <th class="px-3 py-2 text-right">Комиссия</th><th class="px-3 py-2 text-right">Net</th></tr></thead><tbody>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 11:01:21">2026-11-04 11:01:21</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="27450">27450</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0055976">0.0056</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0055976">-0.0056</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 09:25:03">2026-11-04 09:25:03</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="318">318</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="2.71234818">2.7123</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0321657">0.0322</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="2.68018248">2.6802</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 09:01:32">2026-11-04 09:01:32</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="68">68</td>
+ <td class="px-3 py-1 text-right" data-v="3">3</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.60933712">0.6093</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.006919">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.60241812">0.6024</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 09:01:32">2026-11-04 09:01:32</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="68">68</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069088">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069088">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 09:01:32">2026-11-04 09:01:32</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="68">68</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.49839898">0.4984</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.006919">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.49147998">0.4915</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 08:59:40">2026-11-04 08:59:40</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="68">68</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069632">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069632">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 08:59:40">2026-11-04 08:59:40</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="67">67</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.47307628">0.4731</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0068809">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.46619538">0.4662</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 08:58:13">2026-11-04 08:58:13</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="67">67</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069077">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069077">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 08:58:13">2026-11-04 08:58:13</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="67">67</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.41633288">0.4163</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069546">0.0070</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.40937828000000004">0.4094</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 06:27:07">2026-11-04 06:27:07</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="66">66</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.4711703">0.4712</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.006864">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.4643063">0.4643</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 06:27:07">2026-11-04 06:27:07</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="67">67</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00696465">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00696465">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 05:00:53">2026-11-04 05:00:53</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="66">66</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.44893127">0.4489</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069168">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.44201447">0.4420</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 05:00:53">2026-11-04 05:00:53</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="66">66</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069135">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069135">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 04:34:55">2026-11-04 04:34:55</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="66">66</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069663">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069663">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 04:34:55">2026-11-04 04:34:55</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="65">65</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.30473744">0.3047</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00691925">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.29781819000000004">0.2978</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 03:14:51">2026-11-04 03:14:51</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="65">65</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00691275">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00691275">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 03:14:51">2026-11-04 03:14:51</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="65">65</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.30591282">0.3059</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.006955">0.0070</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.29895782">0.2990</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:35:09">2026-11-04 02:35:09</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="65">65</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00696475">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00696475">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:35:09">2026-11-04 02:35:09</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="64">64</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.32804516">0.3280</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0068672">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.32117796">0.3212</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:34:27">2026-11-04 02:34:27</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="64">64</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069088">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069088">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:34:27">2026-11-04 02:34:27</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="64">64</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.22073138">0.2207</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069504">0.0070</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.21378098">0.2138</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:33:13">2026-11-04 02:33:13</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="64">64</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00696">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00696">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 02:33:13">2026-11-04 02:33:13</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.22960727">0.2296</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0068607">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.22274657">0.2227</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 01:46:35">2026-11-04 01:46:35</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.10125127">0.1013</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00694575">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.09430552">0.0943</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-04 01:46:35">2026-11-04 01:46:35</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0068985">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0068985">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 13:22:44">2026-11-03 13:22:44</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.12731959">0.1273</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069489">0.0069</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.12037069000000002">0.1204</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 13:22:44">2026-11-03 13:22:44</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069426">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069426">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 13:22:39">2026-11-03 13:22:39</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="63">63</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069993">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069993">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 13:01:33">2026-11-03 13:01:33</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="62">62</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069285">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069285">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:57:56">2026-11-03 11:57:56</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="62">62</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069843">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069843">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:57:38">2026-11-03 11:57:38</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="61">61</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069174">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069174">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:50:05">2026-11-03 11:50:05</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="67">67</td>
+ <td class="px-3 py-1 text-right" data-v="4">4</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0076999500000000005">0.0077</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0076999500000000005">-0.0077</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:37:49">2026-11-03 11:37:49</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="22193">22193</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00239995">0.0024</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00239995">-0.0024</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:32:12">2026-11-03 11:32:12</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11171">11171</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119998">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119998">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:17:08">2026-11-03 11:17:08</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11248">11248</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119993">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119993">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:40">2026-11-03 11:15:40</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11325">11325</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:29">2026-11-03 11:15:29</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11404">11404</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119992">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119992">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:29">2026-11-03 11:15:29</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11562">11562</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0011999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0011999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:29">2026-11-03 11:15:29</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="19142">19142</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00199995">0.0020</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00199995">-0.0020</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:23">2026-11-03 11:15:23</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11804">11804</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:23">2026-11-03 11:15:23</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11641">11641</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119995">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119995">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:23">2026-11-03 11:15:23</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="23771">23771</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00239992">0.0024</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00239992">-0.0024</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:23">2026-11-03 11:15:23</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11723">11723</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119996">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119996">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:15:08">2026-11-03 11:15:08</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="11988">11988</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:14:02">2026-11-03 11:14:02</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="12091">12091</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119991">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119991">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:13:33">2026-11-03 11:13:33</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="12195">12195</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119998">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119998">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:08:21">2026-11-03 11:08:21</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="28706">28706</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00279998">0.0028</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00279998">-0.0028</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:08:15">2026-11-03 11:08:15</td>
+ <td class="px-3 py-1" data-v="ICNTUSDT">ICNTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="66">66</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0069498">0.0069</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0069498">-0.0069</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:08:06">2026-11-03 11:08:06</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="12442">12442</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0011999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0011999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:07:57">2026-11-03 11:07:57</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="12586">12586</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119994">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119994">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:07:56">2026-11-03 11:07:56</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="25466">25466</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00239991">0.0024</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00239991">-0.0024</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 11:03:17">2026-11-03 11:03:17</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="12878">12878</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119997">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119997">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 08:27:43">2026-11-03 08:27:43</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="706">706</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00706">-0.0071</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00499142">0.0050</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.01205142">-0.0121</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-03 08:27:41">2026-11-03 08:27:41</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="706">706</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00499495">0.0050</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00499495">-0.0050</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 20:20:27">2026-11-02 20:20:27</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="13026">13026</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119995">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119995">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 20:20:27">2026-11-02 20:20:27</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="17570">17570</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00159992">0.0016</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00159992">-0.0016</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 20:19:43">2026-11-02 20:19:43</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="13330">13330</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119996">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119996">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 20:18:27">2026-11-02 20:18:27</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="13483">13483</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119998">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119998">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 19:58:48">2026-11-02 19:58:48</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="22732">22732</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00199996">0.0020</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00199996">-0.0020</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 19:17:10">2026-11-02 19:17:10</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="13876">13876</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00119999">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00119999">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 18:55:29">2026-11-02 18:55:29</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="1041">1041</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="7.15415399">7.1542</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00701113">0.0070</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="7.14714286">7.1471</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 17:09:30">2026-11-02 17:09:30</td>
+ <td class="px-3 py-1" data-v="HOTUSDT">HOTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="32941">32941</td>
+ <td class="px-3 py-1 text-right" data-v="3">3</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00279997">0.0028</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00279997">-0.0028</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 16:20:06">2026-11-02 16:20:06</td>
+ <td class="px-3 py-1" data-v="FIGHTUSDT">FIGHTUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="6448">6448</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="2.611815">2.6118</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.01421784">0.0142</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="2.59759716">2.5976</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 15:46:05">2026-11-02 15:46:05</td>
+ <td class="px-3 py-1" data-v="FIGHTUSDT">FIGHTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1215">1215</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0011992">0.0012</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0011992">-0.0012</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 15:36:29">2026-11-02 15:36:29</td>
+ <td class="px-3 py-1" data-v="FIGHTUSDT">FIGHTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2886">2886</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00279942">0.0028</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00279942">-0.0028</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-02 15:29:01">2026-11-02 15:29:01</td>
+ <td class="px-3 py-1" data-v="FIGHTUSDT">FIGHTUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2347">2347</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00552718">0.0055</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00552718">-0.0055</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 21:51:10">2026-11-01 21:51:10</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="4857">4857</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="14.8254396">14.8254</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.04198876">0.0420</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="14.783450839999999">14.7835</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 21:50:21">2026-11-01 21:50:21</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="3238">3238</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="5.9332664">5.9333</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.02996769">0.0300</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="5.90329871">5.9033</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 18:15:50">2026-11-01 18:15:50</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1406">1406</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 18:15:36">2026-11-01 18:15:36</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1254">1254</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:37:58">2026-11-01 17:37:58</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1405">1405</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:34:24">2026-11-01 17:34:24</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1254">1254</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:34:14">2026-11-01 17:34:14</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1193">1193</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:23:24">2026-11-01 17:23:24</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="1024">1024</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:23:23">2026-11-01 17:23:23</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="843">843</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-11-01 17:16:49">2026-11-01 17:16:49</td>
+ <td class="px-3 py-1" data-v="ESPORTSUSDT">ESPORTSUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="757">757</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00696818">0.0070</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00696818">-0.0070</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-31 15:37:40">2026-10-31 15:37:40</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="7351">7351</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="67.16203388">67.1620</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.06630601">0.0663</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="67.09572786999999">67.0957</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-31 01:20:25">2026-10-31 01:20:25</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="2008">2008</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="6.92046885">6.9205</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.02382492">0.0238</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="6.89664393">6.8966</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-31 01:02:10">2026-10-31 01:02:10</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2008">2008</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.00999984">0.0100</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.00999984">-0.0100</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 19:07:22">2026-10-30 19:07:22</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="2718">2718</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="16.00435482">16.0044</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.02977569">0.0298</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="15.97457913">15.9746</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 18:39:49">2026-10-30 18:39:49</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2930">2930</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0159978">0.0160</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0159978">-0.0160</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 18:35:09">2026-10-30 18:35:09</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2718">2718</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0139977">0.0140</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0139977">-0.0140</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 18:21:24">2026-10-30 18:21:24</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="4250">4250</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="39.30310555">39.3031</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0427975">0.0428</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="39.26030805">39.2603</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 18:09:31">2026-10-30 18:09:31</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-green-600" data-v="BUY">BUY</td>
+ <td class="px-3 py-1 text-right" data-v="8330">8330</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="32.13538688">32.1354</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.10633245">0.1063</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="32.02905443">32.0291</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 17:51:02">2026-10-30 17:51:02</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="3908">3908</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.02399512">0.0240</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.02399512">-0.0240</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 17:51:02">2026-10-30 17:51:02</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="4000">4000</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.026">0.0260</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.026">-0.0260</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 17:51:01">2026-10-30 17:51:01</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="3454">3454</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.01999866">0.0200</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.01999866">-0.0200</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 17:14:15">2026-10-30 17:14:15</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2930">2930</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0159978">0.0160</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0159978">-0.0160</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 16:59:08">2026-10-30 16:59:08</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="2321">2321</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.02983645">0.0298</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.02983645">-0.0298</td></tr>
+<tr class="border-t hover:bg-gray-50">
+ <td class="px-3 py-1 whitespace-nowrap" data-v="2026-10-30 16:55:47">2026-10-30 16:55:47</td>
+ <td class="px-3 py-1" data-v="IDOLUSDT">IDOLUSDT</td>
+ <td class="px-3 py-1 text-red-600" data-v="SELL">SELL</td>
+ <td class="px-3 py-1 text-right" data-v="388">388</td>
+ <td class="px-3 py-1 text-right" data-v="1">1</td>
+ <td class="px-3 py-1 text-right text-green-600" data-v="0.0">0.0000</td>
+ <td class="px-3 py-1 text-right text-gray-500" data-v="0.0019982">0.0020</td>
+ <td class="px-3 py-1 text-right text-red-600" data-v="-0.0019982">-0.0020</td></tr>
+</tbody></table></div></div></div>
+<script>
+document.querySelectorAll('table.sortable').forEach(t=>{
+  t.querySelectorAll('th').forEach((th,i)=>th.addEventListener('click',()=>{
+    const dir=th.dataset.dir==='asc'?'desc':'asc'; th.dataset.dir=dir;
+    const val=r=>{const v=r.cells[i].dataset.v, n=Number(v); return (v!==''&&!isNaN(n))?n:v;};
+    const rows=[...t.tBodies[0].rows];
+    rows.sort((a,b)=>{const x=val(a),y=val(b),c=x>y?1:(x<y?-1:0); return dir==='asc'?c:-c;});
+    rows.forEach(r=>t.tBodies[0].appendChild(r));
+  }));
+});
+const d=[{"cum": 87.1161, "date": "2026-10-30", "net": 87.1161}, {"cum": 161.0985, "date": "2026-10-31", "net": 73.9824}, {"cum": 181.7783, "date": "2026-11-01", "net": 20.6798}, {"cum": 191.5023, "date": "2026-11-02", "net": 9.724}, {"cum": 191.5274, "date": "2026-11-03", "net": 0.0251}, {"cum": 198.4503, "date": "2026-11-04", "net": 6.9229}];
+new Chart(document.getElementById('chart'),{type:'line',
+  data:{labels:d.map(x=>x.date),datasets:[{label:'Net PnL',data:d.map(x=>x.cum),
+   borderColor:'rgb(34,197,94)',backgroundColor:'rgba(34,197,94,0.1)',fill:true,tension:0.1,pointRadius:2}]},
+  options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>'$'+v.toFixed(0)}}}}});
+</script></body></html>
