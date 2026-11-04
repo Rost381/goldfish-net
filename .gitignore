@@ -90,7 +90,11 @@ tmp/
 tmp*
 .notes/
 .session
+
+# Functional
 tz.txt
+promt.txt
+README_LLM.md
 
 # ==========================
 # Data & Files
