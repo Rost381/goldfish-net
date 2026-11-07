@@ -12,9 +12,13 @@ place_market_grid.py - сетка УСЛОВНЫХ РЫНОЧНЫХ ордеро
     python place_market_grid.py BTCUSDT long Bot_levels.csv
     python place_market_grid.py BTCUSDT Short Bot_levels.csv binance real -p -b
     python place_market_grid.py BTCUSDT long Bot_levels.csv demo --profit --break-even --dry-run
+    python place_market_grid.py BTCUSDT long Bot_levels.csv demo -p=0,7      # TP на 70% пути до уровня профита
 
-    -p / --profit      Take-Profit каждого ордера (TAKE_PROFIT_MARKET) = уровень следующего ордера -/+ спред;
-                       для последнего - +/- средний шаг сетки в %
+    -p / --profit [ДОЛЯ]  Take-Profit каждого ордера (TAKE_PROFIT_MARKET). Без значения: TP = уровень следующего ордера
+                       -/+ спред; для последнего - +/- средний шаг сетки в %.
+                       Со значением (0 < ДОЛЯ <= 1, разделитель "." или ","): уровень профита считается так же, но TP
+                       ставится на ДОЛЮ пути от входа до него: -p=0,7 - на 70% пути, то есть на 30% ближе к входу, чем
+                       уровень следующего ордера с учетом спреда (то же для последнего ордера). Округление - до tickSize.
     -b / --break-even  Stop-Loss (STOP_MARKET) ордера номер BREAK_EVEN_SL_ORDER = уровень ордера BREAK_EVEN_LEVEL_ORDER +/- спред
 
 Все условные ордера Binance идут через /fapi/v1/algoOrder (по одному ордеру на запрос, batch невозможен).
@@ -33,7 +37,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Optional
 
@@ -92,6 +96,23 @@ def _market_lot(market: dict[str, Any]) -> tuple[Optional[Decimal], Optional[Dec
     return None, None
 
 
+def parse_profit_fraction(text: str) -> Decimal:
+    """Значение -p/--profit: доля пути (0, 1]; разделитель "." или ","."""
+    try:
+        value = Decimal(text.strip().replace(",", "."))
+    except InvalidOperation:
+        value = None
+    if value is None or not value.is_finite() or not 0 < value <= 1:
+        raise g.GridError(f"-p/--profit: значение {text!r} не подходит - нужна доля пути от входа до уровня профита, "
+                          f"число больше 0 и не больше 1 (например -p=0,7 или --profit=0.7 для 70%). "
+                          f"Если вы хотели указать SYMBOL/SIDE/FILE/MODE - ставьте -p/--profit после них")
+    return value
+
+
+def _pct(value: Decimal) -> str:
+    return format((value * 100).normalize(), "f")
+
+
 def entry_type(long: bool, trigger: Decimal, cur: Decimal) -> str:
     """BUY выше цены / SELL ниже цены -> STOP_MARKET; BUY ниже / SELL выше -> TAKE_PROFIT_MARKET."""
     above = trigger > cur
@@ -108,7 +129,8 @@ def make_closing(role: str, entry: Algo, raw_trigger: Decimal, cur: Decimal, lon
         return None, Skipped(role, entry.n, trigger, reason)
 
     if tp and (trigger <= entry.trigger if long else trigger >= entry.trigger):
-        return skip(f"TP не на стороне прибыли от входа {g.fmt(entry.trigger)} (шаг сетки не больше спреда)")
+        return skip(f"TP не на стороне прибыли от входа {g.fmt(entry.trigger)} (шаг сетки не больше спреда "
+                    f"или доля -p слишком мала для tickSize)")
     if not tp and (trigger >= entry.trigger if long else trigger <= entry.trigger):
         return skip(f"SL не на стороне убытка от входа {g.fmt(entry.trigger)}")
     # Binance: условный ордер, который уже "сработал бы" по текущей цене, отклоняется (-2021)
@@ -123,7 +145,7 @@ def make_closing(role: str, entry: Algo, raw_trigger: Decimal, cur: Decimal, lon
 
 
 def build_plan(ex: ccxt.Exchange, market: dict[str, Any], rows: list[g.CsvRow], ticker: dict[str, Any], side: str,
-               run_id: str, profit: bool, break_even: bool
+               run_id: str, profit: Optional[Decimal], break_even: bool
                ) -> tuple[list[Algo], list[Algo], list[Skipped], list[str], list[str]]:
     sym, long = market["symbol"], side == "long"
     last = ticker.get("last") or ticker.get("close")
@@ -204,7 +226,7 @@ def build_plan(ex: ccxt.Exchange, market: dict[str, Any], rows: list[g.CsvRow], 
         if res[1]:
             skipped.append(res[1])
 
-    if profit:
+    if profit is not None:  # profit = доля пути от входа до уровня профита; 1 = сам уровень (поведение -p без значения)
         step = Decimal(0)
         if n_total >= 2:  # средний шаг в % от уровня первого ордера: размах / (N-1 интервалов)
             step = abs(entries[-1].trigger - entries[0].trigger) / entries[0].trigger / (n_total - 1)
@@ -217,6 +239,8 @@ def build_plan(ex: ccxt.Exchange, market: dict[str, Any], rows: list[g.CsvRow], 
             else:
                 warnings.append("-p: в сетке один ордер - TP последнего ордера (средний шаг) рассчитать нельзя")
                 continue
+            if profit != 1:  # уровень профита -> точка на доле пути от входа к нему (дальше make_closing округлит до tickSize)
+                raw = e.trigger + (raw - e.trigger) * profit
             add(make_closing("TP", e, raw, cur, long, ex, sym, run_id, prefix))
     if break_even:
         if n_total < BREAK_EVEN_SL_ORDER:
@@ -402,7 +426,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--file", "-f", help="путь к CSV (колонки Level и Size)")
     p.add_argument("--exchange", "-e", help="биржа (по умолчанию binance)")
     p.add_argument("--mode", "-m", choices=g.MODES, help="real | demo | testnet (по умолчанию demo)")
-    p.add_argument("-p", "--profit", action="store_true", help="выставить Take-Profit для каждого ордера")
+    p.add_argument("-p", "--profit", nargs="?", const="1", default=None, metavar="ДОЛЯ",
+                   help="выставить Take-Profit для каждого ордера. Без значения: на уровне открытия следующего ордера "
+                        "с учетом спреда (для последнего - средний шаг сетки). Со значением (0 < ДОЛЯ <= 1, разделитель . или ,): "
+                        "на эту долю пути от входа до этого уровня, например -p=0,7 или --profit=0.7 - на 70%% пути, то есть "
+                        "на 30%% ближе к входу, чем уровень следующего ордера с учетом спреда (то же для последнего). "
+                        "Округляется до tickSize. Ставьте после SYMBOL SIDE FILE [EXCHANGE] [MODE]")
     p.add_argument("-b", "--break-even", action="store_true", help="выставить Stop-Loss (безубыток) по константам BREAK_EVEN_*")
     p.add_argument("--dry-run", action="store_true", help="выполнить все проверки и показать план, не отправляя ордера")
     args = p.parse_args(argv)
@@ -415,6 +444,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             g.resolve_args(args)  # те же правила: SYMBOL SIDE FILE [EXCHANGE] [MODE]
         except g.GridError as e:
             raise g.GridError(str(e).replace("place_limit_grid.py", PROG)) from e
+        if args.profit is not None:
+            args.profit = parse_profit_fraction(args.profit)
     except g.GridError as e:
         log.error("%s", e)
         return 1
@@ -429,6 +460,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.error("Ошибка биржи при подготовке: %s", g._err_text(e))
         return 1
 
+    if args.profit is not None and args.profit != 1:
+        log.info("-p=%s: Take-Profit ставится на %s%% пути от входа до уровня профита (на %s%% ближе к входу, чем уровень "
+                 "следующего ордера с учетом спреда), округление до tickSize", g.fmt(args.profit), _pct(args.profit), _pct(1 - args.profit))
     print_plan(entries, closings, skipped)
     if args.dry_run:
         log.info("--dry-run: проверки пройдены, ордера не отправлялись")

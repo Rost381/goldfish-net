@@ -93,8 +93,9 @@ tmp*
 
 # Functional
 tz.txt
-promt.txt
-README_LLM.md
+promt*.txt
+README_LLM*.md
+binance_demo_stats.html
 
 # ==========================
 # Data & Files

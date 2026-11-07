@@ -326,6 +326,12 @@ python place_market_grid.py SYMBOL SIDE FILE [EXCHANGE] [MODE] [-p] [-b] [--dry-
 
 Ключи `-p` и `-b` независимы: можно указать любой из них, оба или ни одного. Они указываются после `MODE`.
 
+-p / --profit [ДОЛЯ] — выставить Take-Profit (TAKE_PROFIT_MARKET) каждому ордеру.
+
+-p без значения: TP на уровне открытия следующего ордера с учётом спреда; для последнего ордера — по среднему шагу сетки.
+-p=0,7 или --profit=0.7: уровень профита считается так же, но TP ставится на 70% пути от входа до него, то есть на 30% ближе к входу, чем уровень следующего ордера с учётом спреда (для последнего ордера то же самое). Разделитель десятичных знаков: . или ,. Допустимые значения: больше 0 и не больше 1. Цена округляется до tickSize, поэтому точная доля не гарантируется.
+Указывайте -p после SYMBOL SIDE FILE [EXCHANGE] [MODE]. В PowerShell значение с запятой лучше брать в кавычки: "-p=0,7".
+
 ```powershell
 python place_market_grid.py ESPORTSUSDT long Bot_levels.csv                       # только входы, demo
 python place_market_grid.py ESPORTSUSDT short Bot_levels.csv binance real -p      # входы + Take-Profit
