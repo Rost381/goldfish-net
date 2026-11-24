@@ -22,6 +22,7 @@ dd_price / dd_time / dd_status на закрывающем филле позиц
 from __future__ import annotations
 
 import argparse
+import itertools
 import heapq
 import logging
 import os
@@ -55,9 +56,12 @@ W_USER_TRADES = 5
 W_INCOME = 30
 W_SYMBOL_CONFIG = 5             # GET /fapi/v1/symbolConfig (плечо и режим маржи; в ccxt cost=5)
 W_EXCHANGE_INFO = 1
+W_BALANCE = 5                  # GET /fapi/v3/balance (по документации Binance вес 5)
 W_POSITION_RISK = 5             # GET /fapi/v3/positionRisk (в ccxt cost=1 — занижен, берём из доки)
 
-QUOTE_ASSETS = {"USDT", "USDC"}  # комиссии в других активах (BNB) в сумму не входят
+QUOTE_ASSETS = {"USDT"}  # ТОЛЬКО USDT (требование пользователя: USDC на демо не используется); комиссии в других активах в сумму не входят
+DEMO_START_DEPOSIT = 5000.0  # Binance Demo: начальный депозит фиксирован (5000 USDT), изменить его нельзя
+QUOTE_SUFFIX = "USDT"    # учитываются только контракты USDT (символы *USDT)
 MAX_ORDERS_IN_HTML = 1000        # полная история — в CSV
 MAX_POSITIONS_IN_HTML = 1000
 MAX_FILLS_IN_HTML = 2000
@@ -209,6 +213,13 @@ def fetch_symbol_config(gov: WeightGovernor) -> dict[str, dict]:
     return {r["symbol"]: r for r in rows}
 
 
+def fetch_wallet_balance(gov: WeightGovernor) -> float | None:
+    """Баланс кошелька USDⓈ-M (без нереализованного PnL): GET /fapi/v3/balance, поле `balance`. ТОЛЬКО актив USDT (USDC и прочие активы игнорируются)."""
+    rows = gov.call(gov.ex.fapiPrivateV3GetBalance, {}, W_BALANCE)
+    vals = [float(r["balance"]) for r in rows if r.get("asset") == "USDT" and r.get("balance") is not None]
+    return vals[0] if vals else None
+
+
 POSITION_NUM_COLS = ["positionAmt", "entryPrice", "markPrice", "unRealizedProfit", "notional", "liquidationPrice"]
 
 
@@ -217,7 +228,7 @@ def fetch_open_positions(gov: WeightGovernor) -> pd.DataFrame:
     rows = gov.call(gov.ex.fapiPrivateV3GetPositionRisk, {}, W_POSITION_RISK)
     df = pd.DataFrame(rows).reindex(columns=["symbol", "positionSide", *POSITION_NUM_COLS])
     df[POSITION_NUM_COLS] = df[POSITION_NUM_COLS].apply(pd.to_numeric, errors="coerce").fillna(0.0)
-    df = df[df["positionAmt"] != 0].copy()           # убираем символы, где есть только открытые ордера
+    df = df[(df["positionAmt"] != 0) & df["symbol"].str.endswith(QUOTE_SUFFIX)].copy()   # только USDT-контракты с позицией
     entry_value = (df["positionAmt"].abs() * df["entryPrice"]).replace(0, float("nan"))
     df["pnl_pct"] = (df["unRealizedProfit"] / entry_value * 100).fillna(0.0)   # % от стоимости входа (без плеча)
     return df.sort_values("unRealizedProfit", ascending=False).reset_index(drop=True)
@@ -434,6 +445,7 @@ def attach_drawdowns(history: pd.DataFrame, raw: pd.DataFrame, get_public_gov: C
 # --------------------------------------------------------------------------- #
 def build_fills_frame(rows: list[dict], tz: str = "UTC") -> pd.DataFrame:
     df = pd.DataFrame(rows).drop_duplicates(subset=["symbol", "id"])
+    df = df[df["symbol"].str.endswith(QUOTE_SUFFIX)].copy()          # только USDT-контракты
     if "positionSide" not in df:
         df["positionSide"] = "BOTH"
     df["id"] = df["id"].astype("int64")
@@ -592,12 +604,16 @@ TEMPLATE = """<!DOCTYPE html>
 <p class="text-sm text-gray-500 mb-6">Символов: {{ symbols|length }} · Ордеров: {{ s.orders }} (филлов: {{ s.fills }})
  · Период: {{ period }} · Время: {{ tz }} · Сформировано: {{ generated }}</p>
 {% if s.foreign_fee_fills %}
-<p class="mb-4 p-3 rounded bg-yellow-100 text-yellow-800 text-sm">⚠ {{ s.foreign_fee_fills }} филлов с комиссией не в USDT/USDC
+<p class="mb-4 p-3 rounded bg-yellow-100 text-yellow-800 text-sm">⚠ {{ s.foreign_fee_fills }} филлов с комиссией не в USDT
  (например BNB) — в «Комиссии» и Net PnL они не учтены.</p>{% endif %}
-<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
- {% for label, val, color in cards %}
- <div class="bg-white p-4 rounded-lg shadow"><p class="text-sm text-gray-500">{{ label }}</p>
- <p class="text-xl font-bold {{ color }}">{{ val }}</p></div>
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+ {% for c in cards %}
+ <div class="bg-white p-4 rounded-lg shadow border-t-4 {{ c.accent }} flex flex-col">
+  <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ c.label }}</p>
+  <p class="text-2xl font-bold leading-tight mt-1 {{ c.color }}">{{ c.val }}</p>
+  <p class="text-sm font-semibold min-h-[1.25rem] {{ c.color2 }}">{{ c.val2 }}</p>
+  <p class="text-xs text-gray-500 mt-auto pt-2">{{ c.cap }}</p>
+ </div>
  {% endfor %}
 </div>
 <div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-4">Открытые позиции
@@ -705,16 +721,19 @@ TEMPLATE = """<!DOCTYPE html>
  <canvas id="chart" height="100"></canvas></div>
 
 <div class="bg-white p-6 rounded-lg shadow mb-8"><div class="flex items-center justify-between mb-1">
- <h2 class="text-xl font-semibold">Просадки (по позициям)</h2>
+ <h2 class="text-xl font-semibold">Просадки и профит (по позициям)</h2>
  <div class="text-sm"><button type="button" data-mode="usdt" class="mode-btn px-3 py-1 rounded border bg-gray-800 text-white">USDT</button>
  <button type="button" data-mode="pct" class="mode-btn px-3 py-1 rounded border bg-white">%</button></div></div>
- <p class="text-xs text-gray-500 mb-3">Макс. просадка каждой закрытой позиции — те же значения, что в колонке «Макс. просадка» таблицы «История позиций», по порядку закрытия.
- <span class="text-blue-600">Синие</span> — лонг (по Low свечей), <span class="text-orange-500">оранжевые</span> — шорт (по High свечей); отсчёт от средней цены входа.</p>
+ <p class="text-xs text-gray-500 mb-3">По порядку закрытия позиций. <b>Вниз</b> — макс. просадка (как в колонке «Макс. просадка»):
+ <span class="text-blue-600">синие</span> — лонг (по Low свечей), <span class="text-orange-500">оранжевые</span> — шорт (по High свечей), от средней цены входа.
+ <b>Вверх</b> — <span class="text-green-600">профит</span> (Net позиции &gt; 0). Если Net &lt; 0 — <span class="text-purple-600">фиолетовый</span> полупрозрачный столбец вниз поверх просадки.
+ В режиме % — просадка в % от цены входа, профит/убыток в % от стоимости пика позиции (без плеча).</p>
  {% if chart_pos %}<canvas id="pdchart" height="90"></canvas>{% else %}<p class="text-sm text-gray-500">Нет данных по просадкам.</p>{% endif %}</div>
 
 <div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-1">Просадки (по дням)</h2>
  <p class="text-xs text-gray-500 mb-3">Линия — просадка кумулятивного Net PnL от исторического максимума (макс. {{ '{:,.2f}'.format(s.max_drawdown) }} USDT по ордерам).
- Столбцы — худшая просадка (MAE, USDT) среди позиций, закрытых в этот день, по реальным 5m-свечам.</p>
+ Красные столбцы вниз — худшая просадка (MAE, USDT) среди позиций, закрытых в этот день, по реальным 5m-свечам.
+ <b>Вверх</b> — <span class="text-green-600">дневной Net PnL</span> (если &gt; 0); если день в минусе — <span class="text-purple-600">фиолетовый</span> полупрозрачный столбец вниз поверх просадки.</p>
  <canvas id="ddchart" height="90"></canvas></div>
 
 <div class="bg-white p-6 rounded-lg shadow mb-8"><h2 class="text-xl font-semibold mb-4">По символам</h2>
@@ -775,26 +794,40 @@ new Chart(document.getElementById('chart'),{type:'line',
   data:{labels:d.map(x=>x.date),datasets:[{label:'Net PnL',data:d.map(x=>x.cum),
    borderColor:'rgb(34,197,94)',backgroundColor:'rgba(34,197,94,0.1)',fill:true,tension:0.1,pointRadius:2}]},
   options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>'$'+v.toFixed(0)}}}}});
+const GRID0={color:c=>c.tick&&c.tick.value===0?'rgba(0,0,0,0.65)':'rgba(0,0,0,0.08)'};
 const dd={{ dd_daily|tojson }};
+const dayLoss=x=>x.day_net<0?x.day_net:null, dayProfit=x=>x.day_net>0?x.day_net:null;
 new Chart(document.getElementById('ddchart'),{type:'bar',
   data:{labels:dd.map(x=>x.date),datasets:[
-   {type:'bar',label:'Худшая просадка позиции за день (MAE, USDT)',data:dd.map(x=>x.pos_dd),backgroundColor:'rgba(239,68,68,0.45)'},
+   {type:'bar',label:'Убыток дня (Net PnL, USDT)',data:dd.map(dayLoss),backgroundColor:'rgba(147,51,234,0.5)',grouped:false,barPercentage:0.5,order:0},
+   {type:'bar',label:'Худшая просадка позиции за день (MAE, USDT)',data:dd.map(x=>x.pos_dd),backgroundColor:'rgba(239,68,68,0.45)',grouped:false,barPercentage:0.9,order:2},
+   {type:'bar',label:'Профит дня (Net PnL, USDT)',data:dd.map(dayProfit),backgroundColor:'rgba(34,197,94,0.6)',grouped:false,barPercentage:0.9,order:2},
    {type:'line',label:'Просадка Net PnL от пика (USDT)',data:dd.map(x=>x.eq_dd),borderColor:'rgb(220,38,38)',
-    backgroundColor:'rgba(220,38,38,0.1)',fill:true,tension:0.1,pointRadius:2}]},
-  options:{responsive:true,scales:{y:{ticks:{callback:v=>'$'+v.toFixed(2)}}}}});
+    backgroundColor:'rgba(220,38,38,0.1)',fill:true,tension:0.1,pointRadius:2,order:1}]},
+  options:{responsive:true,interaction:{mode:'index',intersect:false},plugins:{tooltip:{filter:t=>t.raw!==null&&t.raw!==undefined}},
+   scales:{x:{grid:GRID0},y:{beginAtZero:true,grid:GRID0,ticks:{callback:v=>'$'+v.toFixed(2)}}}}});
 const pdata={{ chart_pos|tojson }};
 if(pdata.length){let mode='usdt';
- const val=x=>mode==='usdt'?x.usdt:x.pct;
+ const num=(a,b)=>mode==='usdt'?a:b, fmt=v=>mode==='usdt'?v.toFixed(2):v.toFixed(1)+'%';
+ const ddv=x=>x.usdt==null?null:num(x.usdt,x.pct);
+ const pfv=x=>x.net>0?num(x.net,x.net_pct):null;
+ const lsv=x=>x.net<0?num(x.net,x.net_pct):null;
  const pc=new Chart(document.getElementById('pdchart'),{type:'bar',
-  data:{labels:pdata.map(x=>x.t),datasets:[{label:'Макс. просадка',data:pdata.map(val),
-   backgroundColor:pdata.map(x=>x.side==='LONG'?'rgba(37,99,235,0.6)':'rgba(249,115,22,0.6)')}]},
-  options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{
+  data:{labels:pdata.map(x=>x.t),datasets:[
+   {label:'Убыток (Net)',data:pdata.map(lsv),backgroundColor:'rgba(147,51,234,0.5)',grouped:false,barPercentage:0.5,order:0},
+   {label:'Макс. просадка',data:pdata.map(ddv),grouped:false,barPercentage:0.9,order:2,
+    backgroundColor:pdata.map(x=>x.side==='LONG'?'rgba(37,99,235,0.6)':'rgba(249,115,22,0.6)')},
+   {label:'Профит (Net)',data:pdata.map(pfv),backgroundColor:'rgba(34,197,94,0.6)',grouped:false,barPercentage:0.9,order:2}]},
+  options:{responsive:true,interaction:{mode:'index',intersect:false},plugins:{legend:{display:false},tooltip:{filter:t=>t.raw!==null&&t.raw!==undefined,callbacks:{
     title:i=>{const p=pdata[i[0].dataIndex];return p.symbol+' · '+(p.side==='LONG'?'Лонг (по Low)':'Шорт (по High)');},
-    label:c=>{const p=pdata[c.dataIndex];return 'Просадка: '+p.usdt.toFixed(4)+' USDT / '+p.pct.toFixed(2)+'%';},
-    afterLabel:c=>{const p=pdata[c.dataIndex];return 'Закрыта: '+p.t+' · худшая цена '+p.price+' ('+p.at+')';}}}},
-   scales:{x:{ticks:{maxTicksLimit:12}},y:{ticks:{callback:v=>mode==='usdt'?v.toFixed(2):v.toFixed(1)+'%'}}}}});
+    label:c=>{const p=pdata[c.dataIndex];
+     if(c.datasetIndex===1)return 'Просадка: '+p.usdt.toFixed(4)+' USDT / '+p.pct.toFixed(2)+'%';
+     const w=c.datasetIndex===2?'Профит':'Убыток';return w+' (Net): '+p.net.toFixed(4)+' USDT / '+p.net_pct.toFixed(2)+'%';},
+    afterBody:i=>{const p=pdata[i[0].dataIndex];return 'Закрыта: '+p.t+(p.usdt==null?' · нет данных свечей':' · худшая цена '+p.price+' ('+p.at+')');}}}},
+   scales:{x:{ticks:{maxTicksLimit:12},grid:GRID0},y:{beginAtZero:true,grid:GRID0,ticks:{callback:v=>fmt(v)}}}}});
  const mb=[...document.querySelectorAll('.mode-btn')];
- mb.forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;pc.data.datasets[0].data=pdata.map(val);
+ mb.forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;
+  pc.data.datasets[0].data=pdata.map(lsv);pc.data.datasets[1].data=pdata.map(ddv);pc.data.datasets[2].data=pdata.map(pfv);
   mb.forEach(x=>{x.classList.toggle('bg-gray-800',x===b);x.classList.toggle('text-white',x===b);});pc.update();}));}
 </script></body></html>
 """
@@ -819,7 +852,7 @@ def _dd_fields(r) -> dict:
 
 def drawdown_by_day(daily: pd.DataFrame, history: pd.DataFrame) -> list[dict]:
     """Дневной ряд: просадка Net PnL от пика + худшая MAE среди позиций, закрытых в этот день."""
-    out = daily[["date", "cum"]].copy()
+    out = daily[["date", "cum", "net"]].rename(columns={"net": "day_net"})
     out["eq_dd"] = out["cum"] - out["cum"].cummax().clip(lower=0)
     worst = (history.assign(date=history["close_time"].dt.strftime("%Y-%m-%d")).groupby("date")["dd_usdt"].min()
              if len(history) else pd.Series(dtype="float64"))
@@ -873,43 +906,181 @@ def _fill_rows(fills: pd.DataFrame) -> list[dict]:
 
 
 def _chart_pos(history: pd.DataFrame) -> list[dict]:
-    """Данные графика «Просадки (по позициям)» — те же значения, что в колонке «Макс. просадка»."""
+    """Данные графика «Просадки / профит (по позициям)».
+
+    usdt/pct — просадка MAE (None, если нет свечей); net — чистый результат позиции (USDT),
+    net_pct — net в % от стоимости пика позиции (без плеча; та же база, что у pct просадки).
+    """
     if history.empty or "dd_usdt" not in history:
         return []
-    h = history.dropna(subset=["dd_usdt"]).tail(MAX_POSITIONS_IN_HTML)
-    return [{"t": r.close_time.strftime("%Y-%m-%d %H:%M"), "symbol": r.symbol, "side": r.side,
-             "usdt": round(float(r.dd_usdt), 4), "pct": round(float(r.dd_pct), 2),
-             "price": _num(r.dd_price), "at": r.dd_at.strftime("%Y-%m-%d %H:%M")}
-            for r in h.itertuples(index=False)]
+
+    def opt(v: float, nd: int) -> float | None:
+        return None if v != v else round(float(v), nd)
+
+    out = []
+    for r in history.tail(MAX_POSITIONS_IN_HTML).itertuples(index=False):
+        has_dd = r.dd_usdt == r.dd_usdt
+        out.append({"t": r.close_time.strftime("%Y-%m-%d %H:%M"), "symbol": r.symbol, "side": r.side,
+                    "usdt": opt(r.dd_usdt, 4), "pct": opt(r.dd_pct, 2),
+                    "price": _num(r.dd_price) if has_dd else "—",
+                    "at": r.dd_at.strftime("%Y-%m-%d %H:%M") if has_dd else "—",
+                    "net": round(float(r.net), 4),
+                    "net_pct": round(float(r.net) / float(r.peak_usdt) * 100, 2) if r.peak_usdt else 0.0})
+    return out
+
+
+def resolve_balances(fills: pd.DataFrame, wallet_now: float | None, deposit: float | None = None) -> dict:
+    """Стартовый баланс = фиксированные 5000 USDT демо-счёта (или --deposit) на момент первой сделки в кэше.
+    «Сейчас» — баланс кошелька из API (если не загружен: start + Σ(realizedPnl − комиссии)). Funding и переводы в Σ не входят."""
+    start = DEMO_START_DEPOSIT if deposit is None else deposit
+    now = wallet_now if wallet_now is not None else start + float((fills["realizedPnl"] - fills["fee_usdt"]).sum())
+    return {"start": start, "now": now, "src": "demo" if deposit is None else "deposit",
+            "start_time": fills["time"].min()}
+
+
+def attach_entry_balance(history: pd.DataFrame, fills: pd.DataFrame, start: float) -> pd.DataFrame:
+    """Добавляет bal_open (баланс кошелька в момент входа = start + net всех сделок строго ДО открытия позиции),
+    dd_dep_pct и net_dep_pct (просадка и результат в % от этого баланса)."""
+    hist = history.copy()
+    if hist.empty:
+        for col in ("bal_open", "dd_dep_pct", "net_dep_pct"):
+            hist[col] = pd.Series(dtype="float64")
+        return hist
+    t = _to_ms(fills["time"]).to_numpy()
+    net = (fills["realizedPnl"] - fills["fee_usdt"]).to_numpy()
+    order = np.argsort(t, kind="stable")
+    cum = np.concatenate(([0.0], np.cumsum(net[order])))
+    hist["bal_open"] = start + cum[np.searchsorted(t[order], hist["open_ms"].to_numpy(), side="left")]
+    base = hist["bal_open"].where(hist["bal_open"] > 0)                      # баланс <= 0 → % не определён
+    hist["dd_dep_pct"] = hist["dd_usdt"] / base * 100 if "dd_usdt" in hist else np.nan
+    hist["net_dep_pct"] = hist["net"] / base * 100
+    return hist
+
+
+def _streaks(net: pd.Series) -> dict:
+    """Серии подряд идущих закрытых позиций (порядок закрытия): net > 0 — прибыльная, net < 0 — убыточная, 0 разрывает серию."""
+    signs = [(v > 0) - (v < 0) for v in net]
+    best = {1: 0, -1: 0}
+    for sign, grp in itertools.groupby(signs):
+        if sign:
+            best[sign] = max(best[sign], sum(1 for _ in grp))
+    cur_sign, cur_len = (0, 0)
+    if signs:
+        cur_sign = signs[-1]
+        cur_len = sum(1 for _ in itertools.takewhile(lambda x: x == cur_sign, reversed(signs))) if cur_sign else 0
+    return {"win": best[1], "loss": best[-1], "cur_sign": cur_sign, "cur_len": cur_len}
+
+
+def _who(r) -> str:
+    return f"{r.symbol} · {'Лонг' if r.side == 'LONG' else 'Шорт'} · закрыта {r.close_time:%Y-%m-%d %H:%M}"
+
+
+def build_cards(stats: dict, history: pd.DataFrame, positions: pd.DataFrame | None, balance: dict | None) -> list[dict]:
+    """16 карточек, сетка 4×4 (на телефоне 2×8): строка = группа (результат / качество / экстремумы / депозит, серии, стороны)."""
+    green, red, gray = "text-green-600", "text-red-600", "text-gray-800"
+    sign_c = lambda v: green if v >= 0 else red                                  # noqa: E731
+    usd = lambda v: f"{'-' if v < 0 else ''}${abs(v):,.2f}"                      # noqa: E731
+    card = lambda label, val, color=gray, val2="", color2=gray, cap="", accent="": dict(  # noqa: E731
+        label=label, val=val, color=color, val2=val2, color2=color2, cap=cap, accent=accent)
+    nd = "н/д"
+    b0 = balance["start"] if balance else None
+    h = history if history is not None else pd.DataFrame()
+    wins_p = int((h["net"] > 0).sum()) if len(h) else 0
+
+    unreal = float(positions["unRealizedProfit"].sum()) if positions is not None and len(positions) else 0.0
+    fee_share = f"{stats['fees'] / abs(stats['realized']) * 100:.1f}% от Realized" if stats["realized"] else ""
+    pf = "∞" if stats["profit_factor"] == float("inf") else f"{stats['profit_factor']:.2f}"
+    payoff = f"payoff {stats['avg_win'] / abs(stats['avg_loss']):.1f}" if stats["avg_loss"] else ""
+    a1, a2, a3, a4 = "border-blue-500", "border-indigo-500", "border-rose-500", "border-teal-500"
+
+    cards = [
+        card("Net PnL", usd(stats["net"]), sign_c(stats["net"]),
+             f"{stats['net'] / b0 * 100:+.1f}% к стартовому депозиту" if b0 and b0 > 0 else "", gray,
+             "Realized − комиссии", a1),
+        card("Realized PnL", usd(stats["realized"]), sign_c(stats["realized"]), "", gray, "до комиссий", a1),
+        card("Комиссии", usd(stats["fees"]), "text-gray-700", fee_share, gray,
+             f"по {stats['fills']} сделкам" + (f" · комиссии не в USDT не учтены ({stats['foreign_fee_fills']})" if stats["foreign_fee_fills"] else ""), a1),
+        card("Unrealized PnL", usd(unreal) if positions is not None else nd, sign_c(unreal) if positions is not None else gray,
+             f"открытых позиций: {len(positions)}" if positions is not None else "", gray,
+             "по mark price на момент запуска", a1),
+        card("Win Rate · позиции", f"{wins_p / len(h) * 100:.1f}%" if len(h) else nd, gray,
+             f"{wins_p} из {len(h)}" if len(h) else "", gray, "закрытые позиции, Net > 0", a2),
+        card("Win Rate · ордера", f"{stats['win_rate']:.1f}%", gray, f"{stats['wins']} из {stats['closing']}", gray,
+             f"net после комиссий · gross {stats['win_rate_gross']:.1f}% ({stats['wins_gross']}/{stats['closing']})", a2),
+        card("Profit Factor", pf, gray, "", gray, "Σ прибыли / Σ убытков (net, по ордерам)", a2),
+        card("Средний win / loss", f"{stats['avg_win']:+,.2f} USDT", green, f"{stats['avg_loss']:+,.2f} USDT", red,
+             payoff or "net на закрывающий ордер", a2),
+    ]
+
+    # --- экстремумы: просадка (MAE) и прибыль, от позиции и от депозита на входе
+    has_dd = len(h) and "dd_usdt" in h and h["dd_usdt"].notna().any()
+    dep_ok = len(h) and "bal_open" in h
+    need = "нужен баланс: доступ к API (balance) или --deposit"
+    if len(h):
+        h = h.assign(net_pct=h["net"] / h["peak_usdt"].where(h["peak_usdt"] > 0) * 100)
+    def extreme(frame: pd.DataFrame, col: str, worst: bool):
+        d = frame.dropna(subset=[col])
+        return None if d.empty else d.loc[d[col].idxmin() if worst else d[col].idxmax()]
+    r1 = extreme(h, "dd_pct", True) if has_dd else None
+    r2 = extreme(h, "dd_dep_pct", True) if has_dd and dep_ok else None
+    r3 = extreme(h, "net_pct", False) if len(h) else None
+    r4 = extreme(h, "net_dep_pct", False) if dep_ok else None
+    cap_dd = f" · по {int(h['dd_usdt'].notna().sum())} из {len(h)} позиций" if has_dd else ""
+    cards += [
+        card("Макс. просадка · от позиции", f"{r1.dd_usdt:,.2f} USDT" if r1 is not None else nd, red,
+             f"{r1.dd_pct:.2f}% от цены входа" if r1 is not None else "", red,
+             (_who(r1) + cap_dd) if r1 is not None else "нет данных свечей", a3),
+        card("Макс. просадка · от депозита", f"{r2.dd_usdt:,.2f} USDT" if r2 is not None else nd, red,
+             f"{r2.dd_dep_pct:.2f}% от баланса на входе (${r2.bal_open:,.0f})" if r2 is not None else "", red,
+             _who(r2) if r2 is not None else (need if not dep_ok else "нет данных свечей"), a3),
+        card("Макс. прибыль · от позиции", f"{r3.net:+,.2f} USDT" if r3 is not None else nd, green,
+             f"{r3.net_pct:+.2f}% от стоимости пика позиции" if r3 is not None else "", green,
+             _who(r3) if r3 is not None else "нет закрытых позиций", a3),
+        card("Макс. прибыль · от депозита", f"{r4.net:+,.2f} USDT" if r4 is not None else nd, green,
+             f"{r4.net_dep_pct:+.2f}% от баланса на входе (${r4.bal_open:,.0f})" if r4 is not None else "", green,
+             _who(r4) if r4 is not None else (need if not dep_ok else "нет закрытых позиций"), a3),
+    ]
+
+    # --- депозит, серии, стороны
+    if balance:
+        chg = (balance["now"] - balance["start"]) / balance["start"] * 100 if balance["start"] > 0 else None
+        cards.append(card("Депозит (кошелёк)", usd(balance["now"]), gray,
+                          f"{chg:+.1f}% с начала периода" if chg is not None else "", sign_c(chg or 0),
+                          f"Старт {balance['start']:,.2f} USDT на {balance['start_time']:%Y-%m-%d %H:%M} (первая сделка)"
+                          + (" · задан --deposit" if balance["src"] == "deposit" else ""), a4))
+    else:
+        cards.append(card("Депозит (кошелёк)", nd, gray, "", gray, need, a4))
+    if len(h):
+        st = _streaks(h.sort_values("close_time")["net"])
+        cur = {1: f"текущая: {st['cur_len']} приб.", -1: f"текущая: {st['cur_len']} убыт."}.get(st["cur_sign"], "текущая: —")
+        cards.append(card("Серия прибыльных / убыточных", f"{st['win']} прибыльных", green, f"{st['loss']} убыточных", red,
+                          f"макс. подряд · {cur} · {len(h)} позиций", a4))
+        for side, name in (("LONG", "Лонг"), ("SHORT", "Шорт")):
+            g = h[h["side"] == side]
+            w = int((g["net"] > 0).sum())
+            cards.append(card(f"{name} · Net PnL", usd(float(g["net"].sum())) if len(g) else nd,
+                              sign_c(float(g["net"].sum())) if len(g) else gray,
+                              f"Win Rate {w / len(g) * 100:.0f}% ({w}/{len(g)})" if len(g) else "", gray,
+                              f"{name.lower()}-позиции, после комиссий", a4))
+    else:
+        cards += [card("Серия прибыльных / убыточных", nd, gray, "", gray, "нет закрытых позиций", a4),
+                  card("Лонг · Net PnL", nd, gray, "", gray, "нет закрытых позиций", a4),
+                  card("Шорт · Net PnL", nd, gray, "", gray, "нет закрытых позиций", a4)]
+    assert len(cards) == 16, len(cards)
+    return cards
 
 
 def render_html(fills: pd.DataFrame, orders: pd.DataFrame, stats: dict, period: str,
                 positions: pd.DataFrame | None = None, positions_error: str = "",
-                history: pd.DataFrame | None = None, hist_info: dict | None = None) -> str:
+                history: pd.DataFrame | None = None, hist_info: dict | None = None,
+                balance: dict | None = None) -> str:
     sym = by_symbol(orders)
     daily = by_day(orders)
     last_orders = orders.tail(MAX_ORDERS_IN_HTML).iloc[::-1].copy()
     last_orders["time"] = last_orders["time"].dt.strftime("%Y-%m-%d %H:%M:%S")
-    pf = "∞" if stats["profit_factor"] == float("inf") else f"{stats['profit_factor']:.2f}"
-    green, red = "text-green-600", "text-red-600"
-    unrealized = float(positions["unRealizedProfit"].sum()) if positions is not None and len(positions) else 0.0
-    cards = [
-        ("Net PnL (realized − комиссии)", f"${stats['net']:,.2f}", green if stats["net"] >= 0 else red),
-        ("Unrealized PnL", f"${unrealized:,.2f}" if positions is not None else "н/д",
-         green if unrealized >= 0 else red),
-        ("Realized PnL", f"${stats['realized']:,.2f}", green if stats["realized"] >= 0 else red),
-        ("Комиссии", f"${stats['fees']:,.2f}", "text-gray-700"),
-        ("Win Rate net (после комиссии)", f"{stats['win_rate']:.1f}% ({stats['wins']}/{stats['closing']})", "text-gray-800"),
-        ("Win Rate gross (realizedPnl)", f"{stats['win_rate_gross']:.1f}% ({stats['wins_gross']}/{stats['closing']})", "text-gray-800"),
-        ("Profit Factor", pf, "text-gray-800"),
-        ("Ср. win / loss", f"{stats['avg_win']:,.2f} / {stats['avg_loss']:,.2f}", "text-gray-800"),
-        ("Макс. просадка", f"${stats['max_drawdown']:,.2f}", red),
-    ]
     history = history if history is not None else pd.DataFrame()
+    cards = build_cards(stats, history, positions, balance)
     hist_rows = [_history_row(r) for r in history.tail(MAX_POSITIONS_IN_HTML).iloc[::-1].itertuples(index=False)]
-    if len(history):
-        cards.insert(5, ("Win Rate (позиции, net)", f"{(history['net'] > 0).mean() * 100:.1f}% "
-                         f"({int((history['net'] > 0).sum())}/{len(history)})", "text-gray-800"))
     env = Environment(autoescape=True)
     return env.from_string(TEMPLATE).render(
         s=stats, symbols=sym["symbol"].tolist(), period=period, cards=cards,
@@ -971,6 +1142,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rebuild", action="store_true", help="игнорировать кэш: перезагрузить сделки и пересчитать просадки")
     p.add_argument("--recompute-dd", action="store_true", help="пересчитать только просадки по свечам")
     p.add_argument("--no-dd", action="store_true", help="не запрашивать свечи (использовать только кэш)")
+    p.add_argument("--deposit", type=float, help="стартовый баланс (USDT) на момент первой сделки; по умолчанию 5000 — фиксированный депозит Binance Demo")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args()
 
@@ -997,6 +1169,7 @@ def main() -> int:
     rows: list[dict] = []
     done: set[str] = set()
     positions, positions_error, symbol_cfg = None, "", None
+    wallet_now: float | None = None
     demo_gov, aborted = None, False
 
     try:
@@ -1013,6 +1186,11 @@ def main() -> int:
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:   # отчёт по сделкам важнее — не роняем его
             positions_error = str(e)[:200]
             log.warning("Позиции не загружены: %s", positions_error)
+
+        try:                                       # баланс кошелька — для метрик «от депозита»
+            wallet_now = fetch_wallet_balance(gov)
+        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
+            log.warning("Баланс не загружен (метрики «от депозита» — только с --deposit): %s", str(e)[:200])
 
         if args.symbols:
             symbols = {x.strip().upper() for x in args.symbols.split(",") if x.strip()}
@@ -1067,6 +1245,10 @@ def main() -> int:
     history, raw, new_dd = attach_drawdowns(history, raw, None if (args.no_dd or aborted) else get_public_gov,
                                             force=args.recompute_dd)
 
+    balance = resolve_balances(fills, wallet_now, args.deposit)
+    history = attach_entry_balance(history, fills, balance["start"])
+    log.info("Депозит: старт $%.2f (%s) → сейчас $%.2f", balance["start"], f"{balance['start_time']:%Y-%m-%d %H:%M}", balance["now"])
+
     if args.rebuild or legacy or new_dd or not cache_path.exists() or len(raw) != len(cache) or (done - scanned):
         save_fills_cache(raw, cache_path)
         log.info("Кэш сохранён: %s (сделок: %d, новых: %d, новых расчётов просадки: %d)",
@@ -1074,7 +1256,8 @@ def main() -> int:
 
     period = f"{fills['time'].min():%Y-%m-%d} … {fills['time'].max():%Y-%m-%d}"
     Path(args.output).write_text(
-        render_html(fills, orders, stats, period, positions, positions_error, history, hist_info), encoding="utf-8")
+        render_html(fills, orders, stats, period, positions, positions_error, history, hist_info, balance),
+        encoding="utf-8")
 
     pf = "∞" if stats["profit_factor"] == float("inf") else f"{stats['profit_factor']:.2f}"
     log.info("Закрытых позиций: %d (пропущено закрытий до окна: %d, ещё открыто: %d)",

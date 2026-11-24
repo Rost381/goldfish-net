@@ -708,10 +708,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         out_path = write_placed_orders(market["id"], args.side, args.mode, specs, status)
-        if out_path:
-            log.info("Установленные ордера (реальные значения с биржи) записаны: %s", out_path)
-        else:
-            log.warning("Нет подтвержденных ордеров - файл placed_orders не создан")
+        
     except OSError as e:
         log.error("Не удалось записать файл placed_orders: %s", e)
 
@@ -725,6 +722,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                   len(specs) - len(bad), len(specs), ", ".join(f"#{s.idx:02d}" for s in bad))
         return 2
     log.info("ИТОГ: все %d ордеров подтверждены на бирже (%s, %s)", len(specs), market["id"], args.mode)
+    if out_path:
+        log.info("Установленные ордера (реальные значения с биржи) записаны:")
+        log.info(out_path)
+    else:
+        log.warning("Нет подтвержденных ордеров - файл placed_orders не создан")
     return 0
 
 
