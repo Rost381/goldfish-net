@@ -1,3 +1,5 @@
 # Python >=3.12.3. Проверено на ccxt 4.5.91
-ccxt
-python-dotenv
+ccxt>=4.5.91
+python-dotenv>=1.2.4
+textual>=8.2.8
+pyperclip>=1.11.0
