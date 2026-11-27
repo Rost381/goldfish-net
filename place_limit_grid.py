@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-place_limit_grid.py - сетка лимитных ордеров на USDT-M фьючерсах (batch + верификация).
+place_limit_grid.py - сетка лимитных ордеров на USDT-M фьючерсах Binance и Bybit (batch + верификация).
 short: лимитные SELL выше рынка        long: лимитные BUY ниже рынка
 Позиционно: SYMBOL SIDE FILE [EXCHANGE] [MODE]   (SIDE - обязателен, без умолчания; регистр не важен)
 Примеры:
 python place_limit_grid.py BTCUSDT short Bot_levels.csv                  # binance, demo (по умолчанию)
 python place_limit_grid.py BTCUSDT Long Bot_levels.csv real
-python place_limit_grid.py BTCUSDT SHORT Bot_levels.csv binance real
+python place_limit_grid.py BTCUSDT SHORT Bot_levels.csv bybit demo
 python place_limit_grid.py BTCUSDT long Bot_levels.csv --dry-run         # только проверки
-python place_limit_grid.py --symbol BTCUSDT --side long --file Bot_levels.csv --mode testnet
+python place_limit_grid.py --symbol BTCUSDT --side long --file Bot_levels.csv --exchange bybit --mode real
 python place_limit_grid.py BTCUSDT short Bot_levels.csv binance demo -foc  # прежняя логика контроля первого ордера
-Ключи из .env (см. .env.example). Для каждого режима - свои ключи:
-real    -> BINANCE_API_KEY / BINANCE_API_SECRET
-demo    -> BINANCE_DEMO_API_KEY / BINANCE_DEMO_API_SECRET      (Demo Trading, demo-fapi.binance.com)
+Биржи: binance (real|demo|testnet), bybit (real|demo; testnet Bybit не поддерживается).
+Ключи из .env (см. .env.example). Для каждой биржи и режима - свои ключи:
+real    -> {BINANCE|BYBIT}_API_KEY / _API_SECRET
+demo    -> {BINANCE|BYBIT}_DEMO_API_KEY / _DEMO_API_SECRET     (Binance Demo Trading / Bybit Demo Trading)
 testnet -> BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET (testnet.binancefuture.com)
-Установленные ордера пишутся в {placed|demo_placed|testnet_placed}_orders/SYMBOL_{Short|Long}_Limit_dd.mm-hh.mm.csv
+Установленные ордера пишутся в {placed|demo_placed|testnet_placed}_orders/ (Binance) или
+{bybit_placed|bybit_demo_placed}_orders/ (Bybit): SYMBOL_{Short|Long}_Limit_dd.mm-hh.mm.csv
 Коды выхода: 0 - все ордера подтверждены на бирже; 1 - ошибка конфигурации/валидации (ничего не отправлено);
 2 - часть ордеров не удалось выставить/подтвердить.
 """
@@ -23,7 +25,6 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
-import os
 import re
 import sys
 import time
@@ -31,7 +32,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, TypeVar
+from typing import Any, Iterable, Optional
 
 if sys.version_info[:2] < (3, 12):
     sys.exit(f"Нужен Python >=3.12, сейчас {sys.version.split()[0]}")
@@ -39,23 +40,22 @@ if sys.version_info[:2] < (3, 12):
 import ccxt  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 
+import grid_exchange as ge  # noqa: E402
+from grid_exchange import ADAPTERS, EXCHANGE_MODES, GridError, ExchangeAdapter, OrderView, api_call, build_adapter, env_names  # noqa: E402,F401
+
 # --------------------------------------------------------------------------------------
 # Константы
 # --------------------------------------------------------------------------------------
 MAX_GRID_ORDERS = 50
-
-# Binance USDⓈ-M POST /fapi/v1/batchOrders: максимум 5 ордеров на запрос (официальная документация).
-# Если лимит изменится - правится только эта константа.
-BATCH_SIZE = 5
+# Размер batch-запроса зависит от биржи: ExchangeAdapter.batch_size (Binance 5, Bybit 20).
 
 MAX_PRICE_RATIO = Decimal(10)  # уровень не дальше чем в 10 раз от текущей цены (в обе стороны)
 MAX_RETRY_ROUNDS = 3  # сколько раз повторять установку недостающих ордеров по одному
-API_RETRIES = 3  # повторы для сетевых ошибок на чтении (не на размещении)
 
 MARKET_FILL_TIMEOUT = 20.0
 MARKET_POLL_INTERVAL = 0.7
 
-MODES = ("real", "demo", "testnet")
+MODES = ge.ALL_MODES
 SIDES = ("long", "short")
 
 # short: SELL выше рынка (positionSide SHORT в hedge); long: BUY ниже рынка (positionSide LONG в hedge)
@@ -65,16 +65,13 @@ SIDE_CFG = {
 }
 
 BASE_DIR = Path(__file__).resolve().parent  # папки с результатами - рядом со скриптом
-#DEFAULT_CSV = BASE_DIR / "input" / "Long26.csv"
-OUTPUT_DIRS = {"real": "placed_orders", "demo": "demo_placed_orders", "testnet": "testnet_placed_orders"}
-CCXT_CLASS = {"binance": "binanceusdm"}  # сюда позже добавятся другие биржи ccxt
+OUTPUT_DIRS = ge.OUTPUT_DIRS
 
 log = logging.getLogger("limit_grid")
-T = TypeVar("T")
 
 
-class GridError(Exception):
-    """Ошибка конфигурации или валидации: ничего не отправлено на биржу."""
+def _err_text(e: BaseException) -> str:
+    return str(e).replace("\n", " ")[:300]
 
 
 # --------------------------------------------------------------------------------------
@@ -186,56 +183,16 @@ def parse_csv(path: Path) -> list[CsvRow]:
 # --------------------------------------------------------------------------------------
 # Биржа
 # --------------------------------------------------------------------------------------
-def env_names(exchange: str, mode: str) -> tuple[str, str]:
-    infix = "" if mode == "real" else f"_{mode.upper()}"
-    prefix = exchange.upper()
-    return f"{prefix}{infix}_API_KEY", f"{prefix}{infix}_API_SECRET"
-
-
+# --------------------------------------------------------------------------------------
+# Биржа, рынок, аккаунт
+# --------------------------------------------------------------------------------------
 def build_exchange(exchange_id: str, mode: str) -> ccxt.Exchange:
-    cls_name = CCXT_CLASS.get(exchange_id)
-    if cls_name is None:
-        raise GridError(f"Биржа {exchange_id!r} пока не поддерживается (доступно: {', '.join(CCXT_CLASS)})")
-
-    key_var, secret_var = env_names(exchange_id, mode)
-    key, secret = os.getenv(key_var, "").strip(), os.getenv(secret_var, "").strip()
-    if not key or not secret:
-        raise GridError(f"Для mode={mode} в .env нужны {key_var} и {secret_var}")
-
-    ex: ccxt.Exchange = getattr(ccxt, cls_name)(
-        {
-            "apiKey": key,
-            "secret": secret,
-            "enableRateLimit": True,
-            "timeout": 20_000,
-            "options": {"defaultType": "swap", "adjustForTimeDifference": True},
-        }
-    )
-
-    if mode == "demo":
-        ex.enable_demo_trading(True)  # demo-fapi.binance.com
-    elif mode == "testnet":
-        ex.set_sandbox_mode(True)  # testnet.binancefuture.com
-
-    return ex
+    """Совместимость: «сырой» ccxt-объект (для вспомогательных скриптов). Скрипты сетки используют build_adapter()."""
+    return build_adapter(exchange_id, mode).ex
 
 
-def api_call(fn: Callable[..., T], *args: Any, tries: int = API_RETRIES, **kwargs: Any) -> T:
-    """Повторяет только сетевые ошибки. Использовать для чтения, не для размещения ордеров."""
-    delay = 1.0
-    for attempt in range(1, tries + 1):
-        try:
-            return fn(*args, **kwargs)
-        except ccxt.NetworkError as e:
-            if attempt == tries:
-                raise
-            log.warning("%s: %s - повтор %d/%d через %.0fс", getattr(fn, "__name__", "api"), e, attempt, tries - 1, delay)
-            time.sleep(delay)
-            delay *= 2
-    raise AssertionError("unreachable")
-
-
-def resolve_market(ex: ccxt.Exchange, symbol_arg: str, exchange_id: str, mode: str) -> dict[str, Any]:
+def resolve_market(adapter: ExchangeAdapter, symbol_arg: str) -> dict[str, Any]:
+    ex = adapter.ex
     sym = symbol_arg.strip().upper()
     candidates: list[dict[str, Any]] = []
 
@@ -249,22 +206,105 @@ def resolve_market(ex: ccxt.Exchange, symbol_arg: str, exchange_id: str, mode: s
 
     if not candidates:
         base = re.split(r"[/:]|USDT$|USDC$", sym)[0]
-        similar = sorted(m["id"] for m in ex.markets.values() if m.get("swap") and m.get("linear") and base and base in m["id"])[:10]
+        linear = [m for m in ex.markets.values() if m.get("swap") and m.get("linear")]
+        similar = sorted(m["id"] for m in linear if base and base in m["id"])[:10]
         hint = f" Похожие: {', '.join(similar)}." if similar else ""
         raise GridError(
-            f"Символ {sym} не торгуется на {exchange_id} в режиме {mode} "
-            f"(в demo/testnet символов намного меньше, чем в real; всего линейных swap: "
-            f"{sum(1 for m in ex.markets.values() if m.get('swap') and m.get('linear'))}).{hint}"
+            f"Символ {sym} не торгуется на {adapter.id} в режиме {adapter.mode} "
+            f"(в demo/testnet символов может быть меньше, чем в real; всего линейных swap: {len(linear)}).{hint}"
         )
 
     market = candidates[0]
-    status = (market.get("info") or {}).get("status")
-    if market.get("active") is False or (status and status != "TRADING"):
-        raise GridError(f"Символ {market['id']} найден, но торги сейчас недоступны (status={status})")
+    if not adapter.trading_ok(market):
+        raise GridError(f"Символ {market['id']} найден, но торги сейчас недоступны (status={(market.get('info') or {}).get('status')})")
     if market.get("quote") != "USDT" or market.get("settle") != "USDT":
         raise GridError(f"Размер ордера задан в USDT, а {market['id']} рассчитывается в {market.get('settle')}")
 
     return market
+
+
+@dataclass
+class Context:
+    """Подключение к бирже + рынок + состояние аккаунта: общая основа place_limit_grid и place_market_grid."""
+
+    adapter: ExchangeAdapter
+    market: dict[str, Any]
+    ticker: dict[str, Any]
+    hedged: bool
+    leverage: Decimal
+    margin_mode: str
+
+    @property
+    def ex(self) -> ccxt.Exchange:
+        return self.adapter.ex
+
+
+def connect(exchange: str, mode: str, symbol: str, side: str) -> Context:
+    adapter = build_adapter(exchange, mode)  # GridError, если нет ключей в .env
+    log.info("Биржа=%s, режим=%s, загружаю рынки ...", exchange, mode)
+    try:
+        adapter.load_markets()
+    except ccxt.AuthenticationError as e:
+        raise GridError(f"Биржа отклонила ключи для mode={mode}: {_err_text(e)}") from e
+    except ccxt.BaseError as e:
+        raise GridError(f"Не удалось загрузить рынки в режиме {mode}: {_err_text(e)}") from e
+
+    market = resolve_market(adapter, symbol)
+
+    try:
+        ticker = adapter.call(adapter.ex.fetch_ticker, market["symbol"])
+    except ccxt.BaseError as e:
+        raise GridError(f"Символ {market['id']} есть в списке, но данные по нему недоступны в режиме {mode}: {_err_text(e)}") from e
+
+    try:
+        st = adapter.account_state(market, side)
+    except ccxt.AuthenticationError as e:
+        raise GridError(f"Биржа отклонила ключи для mode={mode}: {_err_text(e)}") from e
+    except ccxt.BaseError as e:
+        raise GridError(f"Не удалось получить плечо/режим позиций для {market['id']}: {_err_text(e)}") from e
+
+    log.info(
+        "%s %s: last=%s bid=%s ask=%s | плечо=%sx (%s) | режим позиций=%s",
+        market["id"], side, ticker.get("last"), ticker.get("bid"), ticker.get("ask"),
+        st.leverage, st.margin_mode, "hedge" if st.hedged else "one-way",
+    )
+    return Context(adapter, market, ticker, st.hedged, st.leverage, st.margin_mode)
+
+
+def margin_warnings(ctx: Context, total: Decimal, warnings: list[str]) -> None:
+    """Предупреждения (не ошибки): хватает ли маржи и не превышен ли лимит позиции для плеча."""
+    ad, sym, lev = ctx.adapter, ctx.market["symbol"], ctx.leverage
+    need_margin = total / lev
+
+    try:
+        free = Decimal(str(ad.call(ad.ex.fetch_balance)["USDT"]["free"]))
+        if need_margin > free:
+            warnings.append(
+                f"Нужная маржа ~{fmt(need_margin.quantize(Decimal('0.01')))} USDT "
+                f"(сумма {fmt(total)} / плечо {fmt(lev)}x), доступно {fmt(free)} USDT"
+            )
+    except (ccxt.BaseError, KeyError, TypeError) as e:
+        warnings.append(f"Не удалось сверить маржу с балансом: {_err_text(e) if isinstance(e, ccxt.BaseError) else e!r}")
+
+    try:
+        tiers = ad.call(ad.ex.fetch_market_leverage_tiers, sym)
+        caps = [Decimal(str(t["maxNotional"])) for t in tiers if t.get("maxLeverage") and t["maxLeverage"] >= lev and t.get("maxNotional")]
+        if caps and total > max(caps):
+            warnings.append(
+                f"Сумма сетки {fmt(total)} USDT выше лимита позиции {fmt(max(caps))} USDT при плече {fmt(lev)}x "
+                f"(без учета уже открытой позиции)"
+            )
+    except (ccxt.BaseError, KeyError, TypeError, ValueError) as e:
+        warnings.append(f"Не удалось проверить лимит позиции по плечу: {e!r}")
+
+
+def unique_csv_path(out_dir: Path, base: str) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path, n = out_dir / f"{base}.csv", 1
+    while path.exists():  # два запуска в одну минуту - не затираем файл
+        n += 1
+        path = out_dir / f"{base}_{n}.csv"
+    return path
 
 
 # --------------------------------------------------------------------------------------
@@ -472,67 +512,36 @@ def _chunks(items: list[Spec], n: int) -> Iterable[list[Spec]]:
         yield items[i : i + n]
 
 
-def _err_text(e: BaseException) -> str:
-    return str(e).replace("\n", " ")[:300]
-
-
-def place_batches(ex: ccxt.Exchange, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> None:
-    """Размещение пачками по BATCH_SIZE. Итог НЕ интерпретируется как истина - его проверяет verify()."""
-
-    # Почему не ex.create_orders(): внутри он вызывает parse_orders(), который СОРТИРУЕТ результат по timestamp,
-    # а у отклоненных записей ({"code":..,"msg":..}) timestamp нет - они уезжают в начало, и соответствие
-    # "i-й элемент ответа = i-й ордер запроса" (гарантия Binance) теряется. Поэтому тело запроса собирает ccxt
-    # (create_order_request: точность, positionSide, clientOrderId), а ответ читаем сырым и в исходном порядке.
-    for chunk in _chunks(specs, BATCH_SIZE):
-        batch = []
-        for s in chunk:
-            r = order_request(market, s, hedged, side)
-            batch.append(
-                ex.create_order_request(
-                    r["symbol"],
-                    r["type"],
-                    r["side"],
-                    r["amount"],
-                    r["price"],
-                    {**r["params"], "isAlgoOrder": False},
-                )
-            )
-
+def place_batches(adapter: ExchangeAdapter, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> None:
+    """Размещение пачками по adapter.batch_size. Итог НЕ интерпретируется как истина - его проверяет verify().
+    Тело запроса и разбор ответа - в адаптере (Binance: batchOrders, Bybit: create-batch); порядок ответа = порядку запроса."""
+    for chunk in _chunks(specs, adapter.batch_size):
+        span = f"#{chunk[0].idx}-#{chunk[-1].idx}"
         try:
-            response = ex.fapiPrivatePostBatchOrders({"batchOrders": batch})
+            results = adapter.send_limit_batch(market, [order_request(market, s, hedged, side) for s in chunk])
         except ccxt.AuthenticationError:
             raise
         except ccxt.BaseError as e:
-            log.warning(
-                "Batch #%d-#%d: запрос завершился ошибкой (%s) - статус ордеров выяснит проверка",
-                chunk[0].idx,
-                chunk[-1].idx,
-                _err_text(e),
-            )
+            log.warning("Batch %s: запрос завершился ошибкой (%s) - статус ордеров выяснит проверка", span, _err_text(e))
             continue
 
-        if not isinstance(response, list) or len(response) != len(chunk):
-            log.warning(
-                "Batch #%d-#%d: неожиданный ответ %.200s - полагаемся на проверку",
-                chunk[0].idx,
-                chunk[-1].idx,
-                response,
-            )
+        if results is None:
+            log.warning("Batch %s: неожиданный ответ - полагаемся на проверку", span)
             continue
 
-        for s, item in zip(chunk, response):
-            if isinstance(item, dict) and "orderId" in item:
-                log.info("  #%02d %s @ %s принят (orderId=%s)", s.idx, fmt(s.amount), fmt(s.price), item["orderId"])
+        for s, r in zip(chunk, results):
+            if r.ok:
+                log.info("  #%02d %s @ %s принят (orderId=%s)", s.idx, fmt(s.amount), fmt(s.price), r.order_id)
             else:
-                log.warning("  #%02d %s @ %s отклонен: %s", s.idx, fmt(s.amount), fmt(s.price), item)
+                log.warning("  #%02d %s @ %s отклонен: %s", s.idx, fmt(s.amount), fmt(s.price), r.error)
 
 
-def place_single(ex: ccxt.Exchange, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> None:
+def place_single(adapter: ExchangeAdapter, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> None:
     for s in specs:
         req = order_request(market, s, hedged, side)
         try:
-            o = ex.create_order(req["symbol"], req["type"], req["side"], req["amount"], req["price"], req["params"])
-            log.info("  #%02d повторно принят (orderId=%s)", s.idx, o.get("id"))
+            adapter.create_order(market, req["type"], req["side"], req["amount"], req["price"], req["params"])
+            log.info("  #%02d повторно принят", s.idx)
         except ccxt.AuthenticationError:
             raise
         except ccxt.BaseError as e:
@@ -552,137 +561,83 @@ class OrderState:
         return self.state == "open"
 
 
-def _real(o: dict[str, Any]) -> tuple[Decimal, Decimal, Optional[str]]:
-    """Цена/количество/id ордера КАК НА БИРЖЕ (строки из ответа биржи, без float-артефактов)."""
-    info = o.get("info") or {}
-    price = Decimal(str(info.get("price") or o["price"]))
-    amount = Decimal(str(info.get("origQty") or o["amount"]))
-    oid = info.get("orderId") or o.get("id")
-    return price, amount, str(oid) if oid is not None else None
-
-
-def verify(ex: ccxt.Exchange, market: dict[str, Any], specs: list[Spec], side: str) -> dict[str, OrderState]:
+def verify(adapter: ExchangeAdapter, market: dict[str, Any], specs: list[Spec], side: str) -> dict[str, OrderState]:
     """Источник истины - биржа: открытые ордера по символу + статус каждого отсутствующего по clientOrderId."""
-    sym = market["symbol"]
-    open_orders = api_call(ex.fetch_open_orders, sym)
-    by_cid = {o.get("clientOrderId"): o for o in open_orders if o.get("clientOrderId")}
-
+    by_cid = {o.cid: o for o in adapter.open_orders(market) if o.cid}
     result: dict[str, OrderState] = {}
 
     for s in specs:
         o = by_cid.get(s.cid)
-        if o is not None:
-            same = (
-                o.get("side") == SIDE_CFG[side]["order_side"]
-                and Decimal(str(o.get("price"))) == s.price
-                and Decimal(str(o.get("amount"))) == s.amount
-            )
-            result[s.cid] = OrderState("open", "", *_real(o)) if same else OrderState(
-                "mismatch",
-                f"на бирже side={o.get('side')} price={o.get('price')} amount={o.get('amount')}",
-            )
+        if o is None:
+            try:
+                o = adapter.order_by_cid(market, s.cid)
+            except ccxt.OrderNotFound:
+                result[s.cid] = OrderState("absent")
+                continue
+            except ccxt.BaseError as e:
+                result[s.cid] = OrderState("unknown", _err_text(e))
+                continue
+            if o.status == "open":
+                result[s.cid] = OrderState("open", "", o.price, o.amount, o.id)
+            elif o.status == "filled":
+                result[s.cid] = OrderState("filled", f"исполнен: filled={fmt(o.filled)} avg={o.avg}")
+            else:
+                result[s.cid] = OrderState("closed", f"status={o.raw_status} filled={fmt(o.filled)}")
             continue
 
-        try:
-            o = api_call(ex.fetch_order, s.cid, sym, {"origClientOrderId": s.cid})
-        except ccxt.OrderNotFound:
-            result[s.cid] = OrderState("absent")
-            continue
-        except ccxt.BaseError as e:
-            result[s.cid] = OrderState("unknown", _err_text(e))
-            continue
-
-        status = o.get("status")
-        if status == "open":
-            result[s.cid] = OrderState("open", "", *_real(o))
-        elif status == "closed":
-            result[s.cid] = OrderState("filled", f"исполнен: filled={o.get('filled')} avg={o.get('average')}")
-        else:
-            result[s.cid] = OrderState("closed", f"status={status} filled={o.get('filled')}")
+        same = o.side == SIDE_CFG[side]["order_side"] and o.price == s.price and o.amount == s.amount
+        result[s.cid] = OrderState("open", "", o.price, o.amount, o.id) if same else OrderState(
+            "mismatch", f"на бирже side={o.side} price={o.price} amount={o.amount}"
+        )
 
     return result
 
 
-def _dec_or_zero(value: Any) -> Decimal:
-    if value is None:
-        return Decimal(0)
-    try:
-        d = Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
-        return Decimal(0)
-    return d if d.is_finite() else Decimal(0)
-
-
-def _market_state_from_order(o: dict[str, Any], spec: Spec) -> OrderState:
-    status = o.get("status")
-    filled = _dec_or_zero(o.get("filled"))
-    amount = _dec_or_zero(o.get("amount")) or spec.amount
-
-    info = o.get("info") or {}
-    avg_raw = o.get("average") or info.get("avgPrice") or o.get("price")
-    oid = info.get("orderId") or o.get("id")
-    order_id = str(oid) if oid is not None else None
-
-    avg: Optional[Decimal] = None
-    if avg_raw is not None:
-        try:
-            avg = Decimal(str(avg_raw))
-        except (InvalidOperation, ValueError, TypeError):
-            avg = None
-
-    if filled > 0:
-        if amount and filled >= amount:
-            detail = f"исполнен полностью: filled={fmt(filled)}"
+def _market_state_from_order(o: OrderView, spec: Spec) -> OrderState:
+    amount = o.amount or spec.amount
+    if o.filled > 0:
+        if amount and o.filled >= amount:
+            detail = f"исполнен полностью: filled={fmt(o.filled)}"
         else:
-            detail = f"частично исполнен: filled={fmt(filled)} из {fmt(amount)}"
-        if avg is not None:
-            detail += f", avg={fmt(avg)}"
-        return OrderState("filled", detail, avg, amount, order_id)
-
-    if status in ("canceled", "expired", "rejected", "closed"):
-        return OrderState("closed", f"не исполнен: status={status}", None, amount, order_id)
-
-    if status == "open":
-        return OrderState("open", "ожидает исполнения", None, amount, order_id)
-
-    return OrderState("unknown", f"status={status}", None, amount, order_id)
+            detail = f"частично исполнен: filled={fmt(o.filled)} из {fmt(amount)}"
+        if o.avg is not None:
+            detail += f", avg={fmt(o.avg)}"
+        return OrderState("filled", detail, o.avg, amount, o.id or None)
+    if o.status == "closed":
+        return OrderState("closed", f"не исполнен: status={o.raw_status}", None, amount, o.id or None)
+    if o.status == "open":
+        return OrderState("open", "ожидает исполнения", None, amount, o.id or None)
+    return OrderState("unknown", f"status={o.raw_status}", None, amount, o.id or None)
 
 
-def _fetch_market_order_state(ex: ccxt.Exchange, market: dict[str, Any], spec: Spec) -> OrderState:
-    sym = market["symbol"]
+def _fetch_market_order_state(adapter: ExchangeAdapter, market: dict[str, Any], spec: Spec) -> OrderState:
     try:
-        o = api_call(ex.fetch_order, spec.cid, sym, {"origClientOrderId": spec.cid})
+        o = adapter.order_by_cid(market, spec.cid)
     except ccxt.AuthenticationError:
         raise
     except ccxt.OrderNotFound:
         return OrderState("absent")
     except ccxt.BaseError as e:
         return OrderState("unknown", _err_text(e))
-
     return _market_state_from_order(o, spec)
 
 
-def place_market_first(ex: ccxt.Exchange, market: dict[str, Any], spec: Spec, hedged: bool, side: str) -> OrderState:
-    sym = market["symbol"]
+def place_market_first(adapter: ExchangeAdapter, market: dict[str, Any], spec: Spec, hedged: bool, side: str) -> OrderState:
     order_side = SIDE_CFG[side]["order_side"]
-    params: dict[str, Any] = {"clientOrderId": spec.cid, "isAlgoOrder": False}
+    params: dict[str, Any] = {"clientOrderId": spec.cid}
     if hedged:
         params["hedged"] = True
 
     log.info(
         "FOC off: первый уровень #%02d (строка %d, Level=%s) отправляется как MARKET %s amount=%s",
-        spec.idx,
-        spec.line,
-        fmt(spec.price),
-        order_side.upper(),
-        fmt(spec.amount),
+        spec.idx, spec.line, fmt(spec.price), order_side.upper(), fmt(spec.amount),
     )
 
-    created: Optional[dict[str, Any]] = None
+    created: Optional[OrderView] = None
     send_error = ""
 
     try:
-        created = ex.create_order(sym, "market", order_side, float(spec.amount), None, params)
+        created = adapter.create_order(market, "market", order_side, float(spec.amount), None, params)
     except ccxt.AuthenticationError:
         raise
     except ccxt.InsufficientFunds as e:
@@ -690,19 +645,15 @@ def place_market_first(ex: ccxt.Exchange, market: dict[str, Any], spec: Spec, he
     except ccxt.BaseError as e:
         send_error = _err_text(e)
         log.warning("MARKET #%02d: ошибка отправки (%s), проверяю статус по clientOrderId", spec.idx, send_error)
-        state = _fetch_market_order_state(ex, market, spec)
-        if state.state == "filled":
-            return state
-        if state.state == "closed":
+        state = _fetch_market_order_state(adapter, market, spec)
+        if state.state in ("filled", "closed"):
             return state
         # absent/open/unknown - продолжаем опрос, чтобы не задвоить и не потерять уже отправленный ордер
         created = None
 
-    if isinstance(created, dict):
+    if created is not None:  # Binance отвечает сразу с исполнением; Bybit - только id (created is None)
         state = _market_state_from_order(created, spec)
-        if state.state == "filled":
-            return state
-        if state.state == "closed":
+        if state.state in ("filled", "closed"):
             return state
 
     deadline = time.time() + MARKET_FILL_TIMEOUT
@@ -710,12 +661,9 @@ def place_market_first(ex: ccxt.Exchange, market: dict[str, Any], spec: Spec, he
 
     while time.time() < deadline:
         time.sleep(MARKET_POLL_INTERVAL)
-        state = _fetch_market_order_state(ex, market, spec)
+        state = _fetch_market_order_state(adapter, market, spec)
         last_state = state
-
-        if state.state == "filled":
-            return state
-        if state.state == "closed":
+        if state.state in ("filled", "closed"):
             return state
 
     if last_state.state == "absent":
@@ -730,18 +678,17 @@ def place_market_first(ex: ccxt.Exchange, market: dict[str, Any], spec: Spec, he
     return OrderState("unknown", detail)
 
 
-def run_grid(ex: ccxt.Exchange, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> dict[str, OrderState]:
-    log.info("Размещение %d ордеров batch-запросами по %d ...", len(specs), BATCH_SIZE)
-    place_batches(ex, market, specs, hedged, side)
+def run_grid(adapter: ExchangeAdapter, market: dict[str, Any], specs: list[Spec], hedged: bool, side: str) -> dict[str, OrderState]:
+    log.info("Размещение %d ордеров batch-запросами по %d ...", len(specs), adapter.batch_size)
+    place_batches(adapter, market, specs, hedged, side)
 
     status: dict[str, OrderState] = {}
 
     for attempt in range(MAX_RETRY_ROUNDS + 1):
         time.sleep(0.5)  # дать бирже обработать конкурентно исполняемый batch
-        status = verify(ex, market, specs, side)
+        status = verify(adapter, market, specs, side)
 
-        n_ok = sum(1 for v in status.values() if v.ok)
-        log.info("Проверка на бирже: подтверждено %d из %d", n_ok, len(specs))
+        log.info("Проверка на бирже: подтверждено %d из %d", sum(1 for v in status.values() if v.ok), len(specs))
 
         # Повторяем ТОЛЬКО те, о которых биржа достоверно сказала "такого ордера нет":
         # исполненные/отмененные/неопределенные заново не ставим, чтобы не задвоить позицию.
@@ -749,33 +696,22 @@ def run_grid(ex: ccxt.Exchange, market: dict[str, Any], specs: list[Spec], hedge
         if not missing or attempt == MAX_RETRY_ROUNDS:
             break
 
-        log.info(
-            "Повтор %d/%d: выставляю по одному %d ордеров: %s",
-            attempt + 1,
-            MAX_RETRY_ROUNDS,
-            len(missing),
-            ", ".join(f"#{s.idx:02d}" for s in missing),
-        )
-        place_single(ex, market, missing, hedged, side)
+        log.info("Повтор %d/%d: выставляю по одному %d ордеров: %s", attempt + 1, MAX_RETRY_ROUNDS, len(missing),
+                 ", ".join(f"#{s.idx:02d}" for s in missing))
+        place_single(adapter, market, missing, hedged, side)
 
     return status
 
 
-def write_placed_orders(symbol_id: str, side: str, mode: str, specs: list[Spec], status: dict[str, OrderState]) -> Optional[Path]:
-    """Пишет SYMBOL_{Short|Long}_Limit_dd.mm-hh.mm.csv в {placed|demo_placed|testnet_placed}_orders/.
+def write_placed_orders(symbol_id: str, side: str, exchange: str, mode: str, specs: list[Spec], status: dict[str, OrderState]) -> Optional[Path]:
+    """Пишет SYMBOL_{Short|Long}_Limit_dd.mm-hh.mm.csv в папку результатов биржи/режима.
     Только ордера, РЕАЛЬНО стоящие на бирже; цена/количество - с биржи."""
     placed = [(s, status[s.cid]) for s in specs if status[s.cid].ok and status[s.cid].price is not None]
     if not placed:
         return None
 
-    out_dir = BASE_DIR / OUTPUT_DIRS[mode]
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     base = f"{symbol_id}_{SIDE_CFG[side]['title']}_Limit_{datetime.now():%d.%m-%H.%M}"  # локальное время машины
-    path, n = out_dir / f"{base}.csv", 1
-    while path.exists():  # два запуска в одну минуту - не затираем файл
-        n += 1
-        path = out_dir / f"{base}_{n}.csv"
+    path = unique_csv_path(BASE_DIR / ge.output_dir_name(exchange, mode), base)
 
     with path.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter=";")
@@ -788,13 +724,40 @@ def write_placed_orders(symbol_id: str, side: str, mode: str, specs: list[Spec],
 
 
 # --------------------------------------------------------------------------------------
-# Аргументы командной строки
+# Аргументы командной строки (общие для place_limit_grid / place_market_grid / cancel_grid)
 # --------------------------------------------------------------------------------------
+def parse_exchange_mode(tokens: list[str], order: str) -> tuple[Optional[str], Optional[str]]:
+    """Хвост позиционных аргументов [EXCHANGE] [MODE] -> (exchange | None, mode | None), в нижнем регистре."""
+    if len(tokens) > 2:
+        raise GridError(f"Лишние аргументы: {' '.join(tokens[2:])}. {order}")
+    exchange: Optional[str] = None
+    mode: Optional[str] = None
+    if len(tokens) == 1:
+        if tokens[0].lower() in MODES:
+            mode = tokens[0]
+        else:
+            exchange = tokens[0]
+    elif len(tokens) == 2:
+        exchange, mode = tokens
+
+    if exchange is not None and exchange.lower() in MODES:
+        raise GridError(f"Режим {exchange!r} должен стоять после биржи. {order}")
+    if mode is not None and mode.lower() not in MODES:
+        raise GridError(f"Неизвестный режим {mode!r} (допустимо: {', '.join(MODES)}). {order}")
+    return (exchange.strip().lower() if exchange else None), (mode.strip().lower() if mode else None)
+
+
+def check_exchange_mode(exchange: str, mode: str) -> None:
+    if exchange not in ADAPTERS:
+        raise GridError(f"Биржа {exchange!r} пока не поддерживается (доступно: {', '.join(ADAPTERS)})")
+    if mode not in EXCHANGE_MODES[exchange]:
+        raise GridError(f"Режим {mode!r} не поддерживается для {exchange} (допустимо: {', '.join(EXCHANGE_MODES[exchange])})")
+
+
 def resolve_args(args: argparse.Namespace) -> None:
     """Позиционно: SYMBOL SIDE FILE [EXCHANGE] [MODE]. Ключи имеют приоритет и не обязательны."""
     pos = list(args.pos)
     order = "Порядок: SYMBOL SIDE FILE [EXCHANGE] [MODE]"
-    modes = ", ".join(MODES)
 
     if args.symbol is None and pos:
         args.symbol = pos.pop(0)
@@ -811,39 +774,20 @@ def resolve_args(args: argparse.Namespace) -> None:
     if args.symbol is None or args.side is None or args.file is None:
         raise GridError("Нужны SYMBOL, SIDE и FILE: python place_limit_grid.py SYMBOL long|short FILE [EXCHANGE] [MODE]")
 
-    if args.file.lower() in MODES or args.file.lower() in CCXT_CLASS or args.file.lower() in SIDES:
+    if args.file.lower() in MODES or args.file.lower() in ADAPTERS or args.file.lower() in SIDES:
         raise GridError(f"Третьим аргументом должен быть путь к CSV, а не {args.file!r}. {order}")
 
-    exchange, mode = None, None
-    if len(pos) == 1:
-        if pos[0].lower() in MODES:
-            mode = pos[0]
-        else:
-            exchange = pos[0]
-    elif len(pos) == 2:
-        exchange, mode = pos
-    elif len(pos) > 2:
-        raise GridError(f"Лишние аргументы: {' '.join(pos[2:])}. {order}")
-
-    if exchange is not None and exchange.lower() in MODES:
-        raise GridError(f"Режим {exchange!r} должен стоять после биржи. {order}")
-    if mode is not None and mode.lower() not in MODES:
-        raise GridError(f"Неизвестный режим {mode!r} (допустимо: {modes}). {order}")
+    exchange, mode = parse_exchange_mode(pos, order)
     if (exchange and args.exchange) or (mode and args.mode):
         raise GridError("Биржа/режим заданы и позиционно, и ключом - оставьте один способ")
 
     args.exchange = (exchange or args.exchange or "binance").strip().lower()
     args.mode = (mode or args.mode or "demo").strip().lower()
-
-    if args.mode not in MODES:
-        raise GridError(f"Неизвестный режим {args.mode!r} (допустимо: {modes})")
+    check_exchange_mode(args.exchange, args.mode)
 
     args.symbol = args.symbol.strip().upper()
     if not args.symbol.endswith("USDT") or len(args.symbol) <= len("USDT"):
         raise GridError(f"Символ {args.symbol!r} должен оканчиваться на USDT (например BTCUSDT) - размер ордеров задан в USDT")
-
-    if args.exchange not in CCXT_CLASS:
-        raise GridError(f"Биржа {args.exchange!r} пока не поддерживается (доступно: {', '.join(CCXT_CLASS)})")
 
 
 # --------------------------------------------------------------------------------------
@@ -857,101 +801,23 @@ def print_plan(specs: list[Spec]) -> None:
     print(f"Итого: {len(specs)} ордеров, {fmt(sum((s.notional for s in specs), Decimal(0)))} USDT\n")
 
 
-def prepare(args: argparse.Namespace, run_id: str) -> tuple[ccxt.Exchange, dict[str, Any], list[Spec], bool]:
+def prepare(args: argparse.Namespace, run_id: str) -> tuple[Context, list[Spec]]:
     rows = parse_csv(Path(args.file))
-    ex = build_exchange(args.exchange, args.mode)
-
-    log.info("Режим=%s, загружаю рынки %s ...", args.mode, args.exchange)
-    try:
-        api_call(ex.load_markets)
-    except ccxt.AuthenticationError as e:
-        raise GridError(f"Биржа отклонила ключи для mode={args.mode}: {_err_text(e)}") from e
-    except ccxt.BaseError as e:
-        raise GridError(f"Не удалось загрузить рынки в режиме {args.mode}: {_err_text(e)}") from e
-
-    market = resolve_market(ex, args.symbol, args.exchange, args.mode)
-    sym = market["symbol"]
-
-    try:
-        ticker = api_call(ex.fetch_ticker, sym)
-    except ccxt.BaseError as e:
-        raise GridError(f"Символ {market['id']} есть в списке, но данные по нему недоступны в режиме {args.mode}: {_err_text(e)}") from e
-
-    try:
-        lev_info = api_call(ex.fetch_leverage, sym)
-        lev_key, lev_other = ("shortLeverage", "longLeverage") if args.side == "short" else ("longLeverage", "shortLeverage")
-        leverage = lev_info.get(lev_key) or lev_info.get(lev_other)
-        margin_mode = lev_info.get("marginMode")
-    except ccxt.AuthenticationError as e:
-        raise GridError(f"Биржа отклонила ключи для mode={args.mode}: {_err_text(e)}") from e
-    except ccxt.BaseError as e:
-        raise GridError(f"Не удалось получить плечо для {market['id']}: {_err_text(e)}") from e
-
-    if not leverage:
-        raise GridError(f"Биржа не вернула плечо для {market['id']}")
-
-    try:
-        hedged = bool(api_call(ex.fetch_position_mode, sym).get("hedged"))
-    except ccxt.BaseError as e:
-        raise GridError(f"Не удалось определить режим позиций (hedge/one-way): {_err_text(e)}") from e
-
-    log.info(
-        "%s %s: last=%s bid=%s ask=%s | плечо=%sx (%s) | режим позиций=%s",
-        market["id"],
-        args.side,
-        ticker.get("last"),
-        ticker.get("bid"),
-        ticker.get("ask"),
-        leverage,
-        margin_mode,
-        "hedge" if hedged else "one-way",
-    )
+    ctx = connect(args.exchange, args.mode, args.symbol, args.side)
+    ad, market = ctx.adapter, ctx.market
 
     specs, errors, warnings = build_specs(
-        ex,
-        market,
-        rows,
-        ticker,
-        run_id,
-        args.allow_marketable,
-        args.side,
-        args.first_order_control,
+        ctx.ex, market, rows, ctx.ticker, run_id, args.allow_marketable, args.side, args.first_order_control,
     )
 
     # Уже стоящие ордера на тех же уровнях - вероятно, сетка уже выставлена (защита от дублей при перезапуске)
     if specs:
-        existing = api_call(ex.fetch_open_orders, sym)
-        grid_prices = {s.price: s for s in specs}
-        for o in existing:
-            if o.get("side") == SIDE_CFG[args.side]["order_side"] and o.get("price") is not None and Decimal(str(o["price"])) in grid_prices:
-                errors.append(
-                    f"На уровне {o['price']} уже стоит ордер того же направления {o.get('clientOrderId') or o.get('id')} - сетка, вероятно, уже выставлена"
-                )
+        grid_prices = {s.price for s in specs}
+        for o in ad.open_orders(market):
+            if o.side == SIDE_CFG[args.side]["order_side"] and o.price is not None and o.price in grid_prices:
+                errors.append(f"На уровне {fmt(o.price)} уже стоит ордер того же направления {o.cid or o.id} - сетка, вероятно, уже выставлена")
 
-    if specs:
-        total = sum((s.notional for s in specs), Decimal(0))
-        need_margin = total / Decimal(leverage)
-
-        try:
-            free = Decimal(str(api_call(ex.fetch_balance)["USDT"]["free"]))
-            if need_margin > free:
-                warnings.append(
-                    f"Нужная маржа ~{fmt(need_margin.quantize(Decimal('0.01')))} USDT "
-                    f"(сумма {fmt(total)} / плечо {leverage}x), доступно {fmt(free)} USDT"
-                )
-        except (ccxt.BaseError, KeyError, TypeError) as e:
-            warnings.append(f"Не удалось сверить маржу с балансом: {_err_text(e) if isinstance(e, ccxt.BaseError) else e!r}")
-
-        try:
-            tiers = api_call(ex.fetch_market_leverage_tiers, sym)
-            caps = [Decimal(str(t["maxNotional"])) for t in tiers if t.get("maxLeverage") and t["maxLeverage"] >= leverage and t.get("maxNotional")]
-            if caps and total > max(caps):
-                warnings.append(
-                    f"Сумма сетки {fmt(total)} USDT выше лимита позиции {fmt(max(caps))} USDT при плече {leverage}x "
-                    f"(без учета уже открытой позиции)"
-                )
-        except (ccxt.BaseError, KeyError, TypeError, ValueError) as e:
-            warnings.append(f"Не удалось проверить лимит позиции по плечу: {e!r}")
+        margin_warnings(ctx, sum((s.notional for s in specs), Decimal(0)), warnings)
 
     for w in warnings:
         log.warning("ПРЕДУПРЕЖДЕНИЕ: %s", w)
@@ -959,22 +825,22 @@ def prepare(args: argparse.Namespace, run_id: str) -> tuple[ccxt.Exchange, dict[
     if errors:
         raise GridError("Проверки не пройдены, ордера НЕ отправлялись:\n- " + "\n- ".join(errors))
 
-    return ex, market, specs, hedged
+    return ctx, specs
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(
-        description="Сетка лимитных ордеров на USDT-M фьючерсах: short = SELL выше рынка, long = BUY ниже рынка (batch + проверка). "
-        "Позиционно: SYMBOL SIDE FILE [EXCHANGE] [MODE]; ключи необязательны.",
+        description="Сетка лимитных ордеров на USDT-M фьючерсах Binance/Bybit: short = SELL выше рынка, long = BUY ниже рынка "
+        "(batch + проверка). Позиционно: SYMBOL SIDE FILE [EXCHANGE] [MODE]; ключи необязательны.",
         epilog="По умолчанию (без -foc/--first-order-control) первый уровень из CSV отправляется как MARKET и должен исполниться. "
         "Флаг -foc/--first-order-control включает прежний контроль цены первого ордера.",
     )
-    p.add_argument("pos", nargs="*", metavar="SYMBOL SIDE FILE [EXCHANGE] [MODE]", help="например: ESPORTSUSDT short Bot_levels.csv binance real")
+    p.add_argument("pos", nargs="*", metavar="SYMBOL SIDE FILE [EXCHANGE] [MODE]", help="например: ESPORTSUSDT short Bot_levels.csv bybit real")
     p.add_argument("--symbol", "-s", help="фьючерсный символ, например BTCUSDT")
     p.add_argument("--side", help="long (BUY ниже рынка) или short (SELL выше рынка); обязателен, без умолчания")
     p.add_argument("--file", "-f", help="путь к CSV (колонки Level и Size)")
-    p.add_argument("--exchange", "-e", help="биржа (по умолчанию binance)")
-    p.add_argument("--mode", "-m", choices=MODES, help="real | demo | testnet (по умолчанию demo)")
+    p.add_argument("--exchange", "-e", help=f"биржа: {' | '.join(ADAPTERS)} (по умолчанию binance)")
+    p.add_argument("--mode", "-m", choices=MODES, help="real | demo | testnet (по умолчанию demo; testnet только Binance)")
     p.add_argument("--dry-run", action="store_true", help="выполнить все проверки и показать план, не отправляя ордера")
     p.add_argument(
         "--allow-marketable",
@@ -1005,7 +871,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_id = time.strftime("%y%m%d%H%M%S")
 
     try:
-        ex, market, specs, hedged = prepare(args, run_id)
+        ctx, specs = prepare(args, run_id)
     except GridError as e:
         log.error("%s", e)
         return 1
@@ -1013,13 +879,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.error("Ошибка биржи при подготовке: %s", _err_text(e))
         return 1
 
+    adapter, market, hedged = ctx.adapter, ctx.market, ctx.hedged
     market_spec = next((s for s in specs if s.is_market), None)
     if market_spec is not None:
-        log.info(
-            "FOC off: первый уровень #%02d (Level=%s) будет отправлен как MARKET",
-            market_spec.idx,
-            fmt(market_spec.price),
-        )
+        log.info("FOC off: первый уровень #%02d (Level=%s) будет отправлен как MARKET", market_spec.idx, fmt(market_spec.price))
 
     print_plan(specs)
 
@@ -1027,62 +890,48 @@ def main(argv: Optional[list[str]] = None) -> int:
         log.info("--dry-run: проверки пройдены, ордера не отправлялись")
         return 0
 
+    status: dict[str, OrderState] = {}
+    limit_specs = specs
     try:
-        status: dict[str, OrderState] = {}
-        limit_specs = specs
-
         if market_spec is not None:
-            m_state = place_market_first(ex, market, market_spec, hedged, args.side)
+            m_state = place_market_first(adapter, market, market_spec, hedged, args.side)
             status[market_spec.cid] = m_state
 
             if m_state.state != "filled":
-                print(
-                    f"\n{market_spec.idx:>3} {fmt(market_spec.price):>14} {fmt(market_spec.amount):>14}  "
-                    f"ПРОБЛЕМА: {m_state.state} {m_state.detail}".rstrip()
-                )
-                log.error(
-                    "FOC off: первый рыночный ордер #%02d не исполнен; остальные ордера не отправлялись. "
-                    "Проверьте биржу/маржу/связь",
-                    market_spec.idx,
-                )
+                print(f"\n{market_spec.idx:>3} {fmt(market_spec.price):>14} {fmt(market_spec.amount):>14}  "
+                      f"ПРОБЛЕМА: {m_state.state} {m_state.detail}".rstrip())
+                log.error("FOC off: первый рыночный ордер #%02d не исполнен; остальные ордера не отправлялись. "
+                          "Проверьте биржу/маржу/связь", market_spec.idx)
                 return 2
 
             if "частично" in m_state.detail:
-                log.warning(
-                    "FOC off: первый рыночный ордер #%02d исполнен частично (%s); повторная отправка не выполняется",
-                    market_spec.idx,
-                    m_state.detail,
-                )
+                log.warning("FOC off: первый рыночный ордер #%02d исполнен частично (%s); повторная отправка не выполняется",
+                            market_spec.idx, m_state.detail)
             else:
                 log.info("FOC off: первый рыночный ордер #%02d исполнен (%s)", market_spec.idx, m_state.detail)
 
             limit_specs = [s for s in specs if not s.is_market]
 
         if limit_specs:
-            status.update(run_grid(ex, market, limit_specs, hedged, args.side))
+            status.update(run_grid(adapter, market, limit_specs, hedged, args.side))
 
     except ccxt.AuthenticationError as e:
         log.error("Ошибка авторизации/прав API-ключа: %s", _err_text(e))
         return 2
     except ccxt.BaseError as e:
-        log.error(
-            "Не удалось выполнить проверку после размещения: %s. Проверьте открытые ордера вручную (префикс %s%s)",
-            _err_text(e),
-            SIDE_CFG[args.side]["prefix"],
-            run_id,
-        )
+        log.error("Не удалось выполнить проверку после размещения: %s. Проверьте открытые ордера вручную (префикс %s%s)",
+                  _err_text(e), SIDE_CFG[args.side]["prefix"], run_id)
         return 2
 
+    out_path: Optional[Path] = None
     try:
-        out_path = write_placed_orders(market["id"], args.side, args.mode, specs, status)
+        out_path = write_placed_orders(market["id"], args.side, args.exchange, args.mode, specs, status)
     except OSError as e:
         log.error("Не удалось записать файл placed_orders: %s", e)
 
     def _spec_ok(s: Spec) -> bool:
         st = status[s.cid]
-        if s.is_market:
-            return st.state == "filled"
-        return st.ok
+        return st.state == "filled" if s.is_market else st.ok
 
     bad = [s for s in specs if not _spec_ok(s)]
 
@@ -1090,46 +939,32 @@ def main(argv: Optional[list[str]] = None) -> int:
     for s in specs:
         st = status[s.cid]
         if s.is_market:
-            if st.state == "filled":
-                txt = f"OK: MARKET {st.detail}".strip()
-            else:
-                txt = f"ПРОБЛЕМА: {st.state} {st.detail}".strip()
+            txt = f"OK: MARKET {st.detail}".strip() if st.state == "filled" else f"ПРОБЛЕМА: {st.state} {st.detail}".strip()
         else:
             txt = "OK: стоит на бирже" if st.ok else f"ПРОБЛЕМА: {st.state} {st.detail}".strip()
-
         print(f"{s.idx:>3} {fmt(s.price):>14} {fmt(s.amount):>14}  {txt}")
 
+    where = f"{market['id']}, {args.exchange} {args.mode}"
     if bad:
-        log.error(
-            "ИТОГ: на бирже подтверждено %d из %d ордеров; проблемные: %s",
-            len(specs) - len(bad),
-            len(specs),
-            ", ".join(f"#{s.idx:02d}" for s in bad),
-        )
+        log.error("ИТОГ: на бирже подтверждено %d из %d ордеров; проблемные: %s",
+                  len(specs) - len(bad), len(specs), ", ".join(f"#{s.idx:02d}" for s in bad))
         return 2
 
     if market_spec is not None:
         if limit_specs:
-            log.info(
-                "ИТОГ: первый рыночный ордер исполнен, %d лимитных подтверждены на бирже (%s, %s)",
-                len(limit_specs),
-                market["id"],
-                args.mode,
-            )
+            log.info("ИТОГ: первый рыночный ордер исполнен, %d лимитных подтверждены на бирже (%s)", len(limit_specs), where)
         else:
-            log.info("ИТОГ: первый рыночный ордер исполнен (%s, %s)", market["id"], args.mode)
+            log.info("ИТОГ: первый рыночный ордер исполнен (%s)", where)
     else:
-        log.info("ИТОГ: все %d ордеров подтверждены на бирже (%s, %s)", len(specs), market["id"], args.mode)
+        log.info("ИТОГ: все %d ордеров подтверждены на бирже (%s)", len(specs), where)
 
     if out_path:
         log.info("Установленные ордера (реальные значения с биржи) записаны:")
         log.info(out_path)
+    elif market_spec is not None and not any(status[s.cid].ok for s in limit_specs):
+        log.info("Файл placed_orders не создавался: рыночный первый ордер не остается на бирже, лимитных подтвержденных ордеров нет")
     else:
-        has_placed_limits = any((not s.is_market and status[s.cid].ok) for s in specs)
-        if market_spec is not None and not has_placed_limits:
-            log.info("Файл placed_orders не создавался: рыночный первый ордер не остается на бирже, лимитных подтвержденных ордеров нет")
-        else:
-            log.warning("Нет подтвержденных ордеров - файл placed_orders не создан")
+        log.warning("Нет подтвержденных ордеров - файл placed_orders не создан")
 
     return 0
 
